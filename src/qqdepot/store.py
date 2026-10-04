@@ -31,11 +31,6 @@ from qqsync import pins
 
 from qqdepot.pin import qq_home
 
-OCI_ACCEPT = ", ".join([
-    "application/vnd.oci.image.manifest.v1+json",
-    "application/vnd.docker.distribution.manifest.v2+json",
-])
-
 
 class FetchError(Exception):
     """A pin cannot be fetched or does not match its digest."""
@@ -99,7 +94,9 @@ def _fetch_blob(artifact: Artifact, path: Path) -> Path:
     try:
         pins.fetch(artifact.pin, path)
     except pins.PinError as e:
-        raise FetchError(str(e)) from None
+        scheme = urllib.parse.urlparse(artifact.source).scheme
+        hint = "" if scheme in ("https", "file", "oci") else "; a git source needs digest = \"git:<commit>\""
+        raise FetchError(f"{e}{hint}") from None
     return path
 
 

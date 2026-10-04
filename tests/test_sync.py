@@ -253,3 +253,22 @@ def test_git_source_cannot_be_an_option(tmp_path):
     with pytest.raises(store.FetchError, match="not a repository URL"):
         store.ensure(bad)
     assert not marker.exists()
+
+
+def test_registry_token_is_not_sent_on_redirects(monkeypatch):
+    """qqsync's OCI fetch must keep the anonymous token off the blob host a registry redirects to."""
+    from qqsync import pins
+    seen = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(pins._OPENER, "open", lambda request, timeout: seen.append(request) or Response(b"x"))
+    pins._oci_open("https://registry.invalid/v2/r/blobs/x", None, ["tok"])
+    (request,) = seen
+    assert request.unredirected_hdrs["Authorization"] == "Bearer tok"
+    assert "Authorization" not in request.headers
