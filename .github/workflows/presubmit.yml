@@ -22,6 +22,18 @@ jobs:
       # sync's "no other parser" check: manifests are read only through qqsync (the pinned one).
       - name: no second manifest parser
         run: qqsync guard .
+      # gate's agnosticism guard, as release runs it. TODO(expert): let rollers move this pin.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: quirq-ai/gate
+          ref: e718c70e1af337cd67d7e73d06f5d7e471bf7929  # gate main, terms.toml after #15
+          path: .qq/gate
+          persist-credentials: false
+      - name: core code names no language, build tool or deploy target (gate's agnosticism guard)
+        run: |
+          python -m venv .qq/gate-venv
+          .qq/gate-venv/bin/pip install --quiet -e .qq/gate
+          .qq/gate-venv/bin/qqgate guard --repo depot --github .
 
   # Limits: both runners share paths and user, and a red run fails before the compare, so
   # parity is shown for green runs; innernet's results are one case per action (no test suite).
