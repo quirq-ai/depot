@@ -21,7 +21,7 @@ contributor needs (`gclient`, `git cl upload`, `git cl try`, `git cl land`).
 ## Install
 
 Clone this repo once and put its `bin` directory on `PATH`, as with depot_tools. You need
-`git` and `python3` 3.11 or newer with its `venv` module.
+`git` and `python3` 3.11.4 or newer with its `venv` module.
 
 ```sh
 git clone https://github.com/quirq-ai/depot ~/depot
@@ -84,7 +84,7 @@ python -m pip install -e ".[test]"
 python -m pytest -q
 ```
 
-Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11 or newer.
+Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or newer.
 
 ## v0 status
 

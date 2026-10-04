@@ -90,7 +90,9 @@ def main(argv: list[str]) -> int:
     try:
         qq = ensure_launcher(depot)
     except (OSError, subprocess.CalledProcessError) as e:
-        print(f"qq: cannot set up the launcher from {depot}: {e}", file=sys.stderr)
+        detail = getattr(e, "stderr", None)
+        detail = detail.decode(errors="replace") if isinstance(detail, bytes) else detail or ""
+        print(f"qq: cannot set up the launcher from {depot}: {e}\n{detail.strip()}".rstrip(), file=sys.stderr)
         return 1
     os.execv(qq, [str(qq), *argv[1:]])
     return 1  # not reached

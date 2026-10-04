@@ -7,7 +7,7 @@ name = "qqdepot"
 dynamic = ["version"]
 description = "qq, the quirq infra command line: self-updating and version-pinned per repo."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.4"
 # Other qq repos by pinned commit, never by copying code. TODO(expert): let rollers move this pin.
 dependencies = [
     "qqsync @ git+https://github.com/quirq-ai/sync@5abac76af194a40961074ce75432f4fdb79fe951",
