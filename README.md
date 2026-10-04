@@ -59,6 +59,28 @@ digest fixes the exact bytes; a version alone trusts the depot tag `v<version>`.
 TODO(expert): once depot publishes releases (release repo), pin by `sha256` archive by default and
 let the bootstrap update its own checkout.
 
+## Get a repo's toolchains and dependencies
+
+```sh
+qq fetch https://github.com/quirq-ai/xo-space   # clone, then qq sync in it
+qq sync                                        # inside a repo: fetch every pin, check, link
+```
+
+`qq sync` reads the manifest's `[toolchains]` and `[deps]` through `sync` and fetches each pin
+once per machine into `$QQ_HOME/store`, checked against its digest. A tarball is unpacked. The
+pin is then linked at `<repo>/.qq/toolchains/<name>` or `<repo>/.qq/deps/<name>`. The source's
+scheme picks the fetcher:
+
+| Source | Digest | Fetched as |
+|---|---|---|
+| `https://…`, `file://…` | `sha256:` | the bytes at that URL |
+| `oci://REGISTRY/REPO@sha256:<manifest>` | `sha256:<layer>` | that layer of that manifest, which is how `toolchains` publishes |
+| any git URL | `git:<commit>` | the tree at that commit |
+
+A pin with `platforms` uses this machine's entry (`linux-x86_64`, `macos-arm64`, …). A pin
+dropped from the manifest loses its link at the next sync. Registry packages must be public:
+`qq sync` asks for an anonymous token and never sends credentials.
+
 ## Build and test like CI
 
 ```sh
@@ -91,8 +113,8 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | Item | What | PR | State |
 |---|---|---|---|
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
-| V0-DEP-02 | `qq fetch` and `qq sync` | | waiting on V0-SYN-02, V0-TCH-01, V0-TCH-02 |
-| V0-DEP-03 | `qq build` and `qq test` | #3 | in review; parity shown in-process with a test adapter (`tests/test_build.py`). The real local-vs-CI comparison waits on recipes' adapters (V0-REC-02/03) and the generated CI workflow |
+| V0-DEP-02 | `qq fetch` and `qq sync` | #4 | in review; a fresh clone builds after `qq sync` alone in `tests/test_sync.py`. The xo-space and innernet runs wait on public ghcr packages (suraj), promoted pins (V0-TCH-03) and onboarding manifests |
+| V0-DEP-03 | `qq build` and `qq test` | #3 | merged; parity shown in-process with a test adapter (`tests/test_build.py`). The real local-vs-CI comparison waits on recipes' adapters (V0-REC-02/03) and the generated CI workflow |
 | V0-DEP-04 | `qq upload`, `try`, `land`, `status` | | waiting on V0-GAT-01 |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.

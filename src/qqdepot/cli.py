@@ -10,13 +10,13 @@ import sys
 from importlib.metadata import entry_points
 
 from qqdepot import __version__
-from qqdepot.commands import build
+from qqdepot.commands import build, sync
 from qqdepot.pin import PinError, dispatch
 
 # An entry point in this group names a function register(subparsers) that adds one
 # subcommand whose parser sets `run`, a function of the parsed args returning the exit code.
 COMMANDS_GROUP = "qq.commands"
-BUILTIN = (build,)
+BUILTIN = (sync, build)
 
 
 def build_parser() -> argparse.ArgumentParser:
