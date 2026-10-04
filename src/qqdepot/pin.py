@@ -13,7 +13,7 @@ git: digest, have been installed from that commit), so a tag or archive that hol
 something else is an error, not a silent mismatch.
 
 A pin installs only from the depot ($QQ_DEPOT_URL, default quirq-ai/depot) or from a
-source the user lists in $QQ_TRUSTED_SOURCES, and a git: commit must be on a branch or
+source the user lists in $QQ_TRUSTED_SOURCES, and a git: commit must be on main or a v*
 tag there: a pull request that edits the manifest cannot make `qq status` run code from
 a host, or a fork, of its choosing.
 TODO(suraj): protect v* tags in quirq-ai/depot (a version-only pin trusts the tag), and
@@ -203,8 +203,10 @@ def requirement(pin: Pin, scratch: Path) -> str:
 
 
 def _published(source: str, commit: str) -> None:
-    """Refuse a commit no branch or tag of `source` contains. GitHub serves any commit of a
-    repository's fork network by its id, so a trusted URL alone would let a fork's code in."""
+    """Refuse a commit that neither `main` nor a release tag (v*) of `source` contains. GitHub
+    serves any commit of a repository's fork network by its id, so a trusted URL alone would
+    let a fork's code in; and anyone with write access can push a branch at any commit, while
+    main and v* tags are protected (gate's rulesets, qq-release-tags)."""
     with tempfile.TemporaryDirectory(prefix="qq-pin-") as tmp:
         def git(*args: str) -> str:
             return subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True, text=True,
@@ -212,15 +214,15 @@ def _published(source: str, commit: str) -> None:
         try:
             git("init", "-q", "--bare")
             git("fetch", "-q", "--filter=blob:none", "--no-tags", "--end-of-options", source,
-                "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+                "+refs/heads/main:refs/heads/main", "+refs/tags/v*:refs/tags/v*")
             holders = git("for-each-ref", f"--contains={commit}", "--format=%(refname)")
         except subprocess.CalledProcessError:
             holders = ""   # also when the commit is not there at all
         except OSError as e:
             raise PinError(f"cannot run git to check {source}@{commit[:12]}: {e}") from None
     if not holders.strip():
-        raise PinError(f"{commit} is on no branch or tag of {source}, so it is not that repo's code; "
-                       "pin a commit that is merged there")
+        raise PinError(f"{commit} is on neither main nor a v* tag of {source}, so it is not that repo's "
+                       "released code; pin a commit merged to main")
 
 
 def installed_commit(target: Path) -> str | None:
