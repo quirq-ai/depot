@@ -83,6 +83,7 @@ def test_dispatch_skipped_when_pinned(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(pin, "ensure", lambda p: pytest.fail("must not install"))
     pin.dispatch([])  # QQ_PINNED=1 from conftest
+    assert "QQ_PINNED" not in pin.os.environ  # a qq this one runs pins again
 
 
 def test_dispatch_execs_pinned(monkeypatch, tmp_path):
@@ -104,3 +105,8 @@ def test_ensure_rejects_wrong_version(monkeypatch, tmp_path):
     with pytest.raises(pin.PinError, match="installs qq 9.9.9"):
         pin.ensure(pin.Pin("1.0", manifest=Path("infra/repo.toml")))
     assert not (pin.qq_home() / "versions" / "1.0").exists()
+
+
+def test_source_without_scheme_is_a_pin_error(tmp_path):
+    with pytest.raises(pin.PinError, match="cannot download"):
+        pin.requirement(pin.Pin("1.0", "relative/x.tar.gz", "sha256:" + "0" * 64), tmp_path)

@@ -40,3 +40,15 @@ def test_pin_error_exits_2(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     assert cli.main(["--version"]) == 2
     assert "QQ_PINNED=1" in capsys.readouterr().err
+
+
+def test_broken_plugin_is_skipped(monkeypatch, capsys):
+    class Broken:
+        name = "broken"
+
+        def load(self):
+            raise ImportError("no module named nowhere")
+
+    monkeypatch.setattr(cli, "entry_points", lambda group: [Broken()])
+    assert cli.main([]) == 0
+    assert "skipping subcommand 'broken'" in capsys.readouterr().err

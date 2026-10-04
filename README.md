@@ -46,12 +46,15 @@ that it reports the pinned version; later runs reuse it. When a roll moves the p
 installs the new version by itself: that is how `qq` updates. Outside a repo, or in one without a
 `[qq]` table, `qq` runs the version of your depot checkout.
 
+Trust: a pin runs code from where it points, as building the repo does. A `git:` or `sha256:`
+digest fixes the exact bytes; a version alone trusts the depot tag `v<version>`.
+
 | Variable | Meaning |
 |---|---|
-| `QQ_HOME` | Where launcher and pinned versions live |
+| `QQ_HOME` | Where launchers and pinned versions live |
 | `QQ_PYTHON` | The interpreter the bootstrap uses (default `python3`) |
 | `QQ_DEPOT_URL` | Where version tags are fetched from (default this repo; a mirror works) |
-| `QQ_PINNED=1` | Run this `qq` as is, without reading the pin |
+| `QQ_PINNED=1` | Run this `qq` as is, without reading the pin (applies to that one process) |
 
 TODO(expert): once depot publishes releases (release repo), pin by `sha256` archive by default and
 let the bootstrap update its own checkout.

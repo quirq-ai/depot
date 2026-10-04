@@ -92,3 +92,18 @@ def test_outside_a_repo_runs_the_launcher(tmp_path):
     assert run.returncode == 0, run.stderr
     assert run.stdout.strip().startswith("qq ")
     assert "installing" not in run.stderr
+
+
+def test_concurrent_first_runs(tmp_path, mirror):
+    """Several sessions running qq for the first time at once each get the pinned version."""
+    env = fresh_machine(tmp_path)
+    env["QQ_DEPOT_URL"] = mirror.as_uri()
+    repo = consumer(tmp_path, f'[qq]\nversion = "{PINNED}"\n')
+    runs = [subprocess.Popen([str(DEPOT / "bin" / "qq"), "--version"], cwd=repo, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(3)]
+    results = [(r.wait(timeout=600), *r.communicate()) for r in runs]
+    for code, out, err in results:
+        assert code == 0, err
+        assert out.strip() == f"qq {PINNED}"
+    assert sum("setting up the launcher" in err for _, _, err in results) == 1
+    assert sum("installing qq" in err for _, _, err in results) == 1

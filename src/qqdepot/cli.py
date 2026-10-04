@@ -23,7 +23,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"qq {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     for ep in sorted(entry_points(group=COMMANDS_GROUP), key=lambda ep: ep.name):
-        ep.load()(sub)
+        try:
+            ep.load()(sub)
+        except Exception as e:  # one broken plugin must not take down every command
+            print(f"qq: skipping subcommand {ep.name!r}: {e}", file=sys.stderr)
     return parser
 
 

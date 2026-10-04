@@ -107,7 +107,7 @@ def _fetch_archive(pin: Pin, into: Path) -> Path:
     try:
         with urllib.request.urlopen(pin.source, timeout=60) as response, path.open("wb") as out:
             shutil.copyfileobj(response, out)
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise PinError(f"cannot download {pin.source}: {e}") from None
     actual = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     if actual != pin.digest:
@@ -166,7 +166,8 @@ def ensure(pin: Pin) -> Path:
 
 def dispatch(argv: list[str]) -> None:
     """Replace this process with the pinned qq, unless this already is it."""
-    if os.environ.get(PINNED_ENV) == "1":
+    if os.environ.pop(PINNED_ENV, None) == "1":
+        # Only this process skips the pin; a qq it runs, maybe in another repo, pins again.
         return
     pin = read_pin(Path.cwd())
     if pin is None or is_self(pin):
