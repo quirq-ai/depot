@@ -9,6 +9,13 @@ import sys
 
 args = sys.argv[1:]
 repo = args[args.index("--repo") + 1]
+odd = os.environ.get("FAKE_GATE_ODD")   # hang | list | pass-but-1: answers the real gate never gives
+if odd == "hang":
+    import time
+    time.sleep(60)
+if odd == "list":
+    print("[]")
+    sys.exit(0)
 if os.environ.get("FAKE_GATE_CRASH"):   # a failure whose text happens to name the ungated case
     print(f"qqgate: internal error: {repo!r} is not an onboarded repo, or so the traceback says", file=sys.stderr)
     sys.exit(2)
@@ -33,4 +40,4 @@ with open(os.environ["FAKE_GH_STATE"] + ".gate-token", "w") as f:
     f.write(os.environ.get("QQ_GITHUB_TOKEN", ""))
 print(json.dumps({"repo": repo, "verdict": "pass" if passed else "refused",
                   "missing": missing, "failing": failing, "green": green}))
-sys.exit(0 if passed else 1)
+sys.exit(1 if odd == "pass-but-1" else 0 if passed else 1)
