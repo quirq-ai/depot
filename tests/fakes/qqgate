@@ -9,6 +9,10 @@ import sys
 
 args = sys.argv[1:]
 repo = args[args.index("--repo") + 1]
+if repo not in os.environ["FAKE_GATE_REPOS"].split(",") and os.environ.get("FAKE_GATE_UNGATED") == "exit3":
+    print(json.dumps({"repo": repo, "onboarded": False}))
+    print(f"qqgate: {repo!r} is not in infra-config repos.toml", file=sys.stderr)
+    sys.exit(3)
 if repo not in os.environ["FAKE_GATE_REPOS"].split(","):
     print(f"qqgate: {repo!r} is not an onboarded repo in infra-config repos.toml (known: demo)", file=sys.stderr)
     sys.exit(2)

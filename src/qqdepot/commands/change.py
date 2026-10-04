@@ -68,7 +68,8 @@ def _runs(be, change) -> list[int]:
 
 def _receipt(args, kind: str, change, be, **land) -> int:
     notify = args.notify if args.notify is not None else os.environ.get(watch.NOTIFY_ENV)
-    w = watch.spawn(kind, args.backend, change, notify or None, args.interval, args.deadline, **land)
+    w = watch.spawn(kind, args.backend, change, notify or None, args.interval, args.deadline,
+                    grace=args.grace, **land)
     receipt = {**w, "change": change.to_json(), "runs": _runs(be, change)}
     lines = [f"{kind} {w['run_id']}: {change.url} at {change.head[:12]}",
              f"  the verdict is pushed to {w['verdict_file']}" + (f" and to {notify}" if notify else ""),
@@ -150,6 +151,7 @@ def register(sub) -> None:
     watching.add_argument("--notify", help=f"command that gets the verdict JSON on stdin (default ${watch.NOTIFY_ENV})")
     watching.add_argument("--interval", type=float, default=watch.DEFAULT_INTERVAL, help=argparse.SUPPRESS)
     watching.add_argument("--deadline", type=float, default=watch.DEFAULT_DEADLINE, help=argparse.SUPPRESS)
+    watching.add_argument("--grace", type=float, default=watch.DEFAULT_GRACE, help=argparse.SUPPRESS)
     changing = argparse.ArgumentParser(add_help=False)
     changing.add_argument("change", nargs="?", help="number, URL or branch (default: this branch's change)")
 

@@ -30,7 +30,10 @@ from qqdepot.pin import qq_home
 DEFAULT_INTERVAL = 30        # seconds between looks at the change
 DEFAULT_DEADLINE = 3 * 3600  # give up and say so after this long
 ERROR_BUDGET = 600           # seconds of backend errors in a row before the watcher reports one
-NO_RUNS_GRACE = 600          # seconds with no run at all for the commit before it is refused
+# How long a required check may stay unreported while nothing runs (no run started, or every run
+# finished) before the change is refused: a check that never reported verified nothing (the
+# gate's rule). The grace covers runs that start late (workflow_run, other CI apps).
+DEFAULT_GRACE = 300
 NOTIFY_ENV = "QQ_NOTIFY"
 
 
@@ -44,9 +47,9 @@ def verdict_path(rid: str) -> Path:
 
 def spawn(kind: str, backend: str, change: Change, notify: str | None,
           interval: float = DEFAULT_INTERVAL, deadline: float = DEFAULT_DEADLINE,
-          method: str | None = None, enqueued: bool = False) -> dict:
-    """`method` is how a land merges once the gate passes; `enqueued` says it already is queued."""
-    """Start the watcher detached from this process and return what the agent needs at once."""
+          method: str | None = None, enqueued: bool = False, grace: float = DEFAULT_GRACE) -> dict:
+    """Start the watcher detached from this process and return what the agent needs at once.
+    `method` is how a land merges once the gate passes; `enqueued` says it already is queued."""
     rid = run_id(kind, change)
     out = verdict_path(rid)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +57,7 @@ def spawn(kind: str, backend: str, change: Change, notify: str | None,
     log = out.with_suffix(".log")
     cmd = [sys.executable, "-m", "qqdepot.watch", "--kind", kind, "--backend", backend,
            "--repo", change.repo, "--number", str(change.number), "--sha", change.head,
-           "--interval", str(interval), "--deadline", str(deadline)]
+           "--interval", str(interval), "--deadline", str(deadline), "--grace", str(grace)]
     if notify:
         cmd += ["--notify", notify]
     if method:
@@ -90,23 +93,29 @@ class Watch:
     def __init__(self, args, backend):
         self.args, self.backend = args, backend
         self.enqueued = args.enqueued
-        self.unqueued = 0     # looks in a row that found a land neither queued nor merged
+        self.unqueued = None  # since when a queued land has been neither queued nor merged
+        self.idle = None      # since when checks are missing and nothing runs that could report them
         self.started = time.monotonic()
 
     def look(self, change: Change) -> tuple[str | None, dict | None]:
         """(final result or None to keep watching, gate verdict if one was read)."""
         a, be = self.args, self.backend
-        if change.state == "merged":
-            return "landed", None
         if change.head != a.sha:
             return "superseded", None     # someone pushed again; that commit needs its own try
+        if change.state == "merged":
+            return "landed", None
         if change.state == "closed":
             return "closed", None
         if a.kind == "land" and self.enqueued:
             # Merged is checked first; the queue can drop a change whose merge result failed.
-            # Two looks in a row, so a merge that has not shown up as merged yet is not a drop.
-            self.unqueued = 0 if be.queued(change.repo, change.number) else self.unqueued + 1
-            return ("dequeued", gate.verdict(change.repo, a.sha, be)) if self.unqueued >= 2 else (None, None)
+            # A while out of the queue, so a merge that has not shown up as merged yet is no drop.
+            if be.queued(change.repo, change.number):
+                self.unqueued = None
+                return None, None
+            self.unqueued = self.unqueued or time.monotonic()
+            if time.monotonic() - self.unqueued >= a.grace / 5:
+                return "dequeued", gate.verdict(change.repo, a.sha, be)
+            return None, None
         v = gate.verdict(change.repo, a.sha, be)
         if v["result"] == "refused":
             return "refused", v
@@ -116,9 +125,21 @@ class Watch:
             be.enqueue(change.repo, change.number, a.sha, a.method)   # land only after the gate's pass
             self.enqueued = True
             return None, v
-        if time.monotonic() - self.started > NO_RUNS_GRACE and not be.runs(change.repo, a.sha):
-            return "refused", {**v, "reason": "no workflow ran for this commit"}
+        if self._idle(v, be.runs(change.repo, a.sha)):
+            self.idle = self.idle or time.monotonic()
+            if time.monotonic() - self.idle >= a.grace:
+                return "refused", {**v, "reason": "required checks never reported, and nothing is running"}
+        else:
+            self.idle = None
         return None, v
+
+    @staticmethod
+    def _idle(v: dict, runs: dict) -> bool:
+        """Nothing that could still report: no check running and no run unfinished."""
+        states = [f["state"] for f in v.get("failing", [])] + list(v.get("checks", {}).values())
+        if any(s in gate.RUNNING for s in states):
+            return False
+        return all(status == "completed" for status in runs.values())
 
 
 def watch(args: argparse.Namespace) -> int:
@@ -163,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--enqueued", action="store_true", help="land: already queued")
     ap.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
     ap.add_argument("--deadline", type=float, default=DEFAULT_DEADLINE)
+    ap.add_argument("--grace", type=float, default=DEFAULT_GRACE)
     return watch(ap.parse_args(argv))
 
 

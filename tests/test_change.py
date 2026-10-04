@@ -195,7 +195,7 @@ def test_land_reports_a_change_the_queue_dropped(world):
     cmd, pushed = notify_cmd(world.tmp)
     qq("upload")
     world.set_checks(world.head(), {"demo-presubmit": "success"})
-    qq("land", "--notify", cmd, "--interval", "0.2", "--deadline", "60")
+    qq("land", "--notify", cmd, "--interval", "0.2", "--deadline", "60", "--grace", "1")
     world.update(lambda s: s["prs"]["1"].update(queued=False))   # its merge result failed
     assert wait_for(pushed)["result"] == "dequeued"
 
@@ -208,14 +208,18 @@ def test_land_of_a_refused_change_queues_nothing(world):
     assert world.read()["merges"] == []
 
 
-def test_a_required_check_that_never_reports_is_refused_once_runs_finish(world):
-    qq("upload")
+def test_a_required_check_that_never_reports_is_refused_after_a_grace(world):
+    cmd, pushed = notify_cmd(world.tmp)
     sha = world.head()
     world.set_checks(sha, {"other": "success"})
     world.update(lambda s: s["runs"].__setitem__(sha, {"7": "in_progress"}))
-    assert qq("status", check=False).returncode == 3
+    qq("try", "--notify", cmd, "--interval", "0.2", "--deadline", "60", "--grace", "1")
+    time.sleep(2)
+    assert not pushed.exists()   # a run is still going, so the check may yet report
     world.update(lambda s: s["runs"].__setitem__(sha, {"7": "completed"}))
-    assert qq("status", check=False).returncode == 1
+    assert qq("status", check=False).returncode == 3   # status alone never guesses: pending
+    got = wait_for(pushed)
+    assert got["result"] == "refused" and got["verdict"]["missing"] == ["demo-presubmit"]
 
 
 def test_upload_ignores_a_fork_change_with_the_same_branch_name(world):
@@ -239,8 +243,10 @@ def test_status_exit_codes(world):
     assert qq("status", "1", check=False).returncode == 1
 
 
-def test_status_of_an_ungated_repo_reports_the_backend_checks(world, monkeypatch):
+@pytest.mark.parametrize("signal", ["message", "exit3"])
+def test_status_of_an_ungated_repo_reports_the_backend_checks(world, monkeypatch, signal):
     monkeypatch.setenv("FAKE_GATE_REPOS", "other")
+    monkeypatch.setenv("FAKE_GATE_UNGATED", signal)   # the pinned gate's message, or gate 5ba0d58's exit 3
     qq("upload")
     world.set_checks(world.head(), {"lint": "success", "unit": "skipped"})
     p = qq("status", "--json", check=False)

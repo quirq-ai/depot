@@ -124,8 +124,11 @@ def queued(repo: str, number: int) -> bool:
     owner, name = repo.split("/", 1)
     q = ("query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p)"
          "{isInMergeQueue autoMergeRequest{enabledAt}}}}")
-    pr = _json(["gh", "api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"n={name}",
-                "-F", f"p={number}"])["data"]["repository"]["pullRequest"]
+    data = _json(["gh", "api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"n={name}",
+                  "-F", f"p={number}"])
+    pr = ((data.get("data") or {}).get("repository") or {}).get("pullRequest")
+    if pr is None:
+        raise ChangeError(f"GitHub returned no change {repo}#{number}: {data.get('errors')}")
     return bool(pr["isInMergeQueue"] or pr["autoMergeRequest"])
 
 

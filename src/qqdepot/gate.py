@@ -32,6 +32,7 @@ GATE_ENV, CONFIG_ENV = "QQ_GATE", "QQ_GATE_CONFIG"
 RUNNING = frozenset({"queued", "in_progress", "waiting", "requested", "pending", "expected"})
 UNGATED_PASSING = frozenset({"success", "neutral", "skipped"})   # GitHub's own rule
 UNGATED_MARK = "is not an onboarded repo"                          # qqgate's message (required.py)
+UNGATED_EXIT = 3   # qqgate from 5ba0d58 on; the message alone covers the pinned eba7c1c
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -107,7 +108,7 @@ def _qqgate(args: list[str], token: str | None = None) -> tuple[int, dict | None
     except OSError as e:
         raise ChangeError(f"cannot run the gate ({exe}): {e}") from None
     data = None
-    if p.returncode in (0, 1):
+    if p.returncode in (0, 1) or (p.returncode == UNGATED_EXIT and p.stdout.strip()):
         try:
             data = json.loads(p.stdout)
         except json.JSONDecodeError as e:
@@ -126,7 +127,7 @@ def required(repo: str) -> dict | None:
     rc, data, err = _qqgate(["required", "--repo", gated_name(repo)])
     if rc == 0:
         return data
-    if UNGATED_MARK in err:
+    if rc == UNGATED_EXIT or UNGATED_MARK in err:
         return None
     raise ChangeError(f"the gate could not compute {repo}'s required checks: {err}")
 
@@ -147,23 +148,13 @@ def classify_ungated(checks: dict[str, str]) -> str:
     return "pass"
 
 
-def _all_finished(backend, repo: str, sha: str) -> bool:
-    runs = backend.runs(repo, sha)
-    return bool(runs) and all(status == "completed" for status in runs.values())
-
-
 def verdict(repo: str, sha: str, backend) -> dict:
     """{"result": pass|refused|pending, "gated": bool, ...} for one commit."""
     token = backend.token()
     rc, data, err = _qqgate(["verdict", "--repo", gated_name(repo), "--sha", sha], token)
-    if data is not None:
-        result = classify_gated(data)
-        if result == "pending" and not data["failing"] and _all_finished(backend, repo, sha):
-            # A required check that never reported verified nothing (the gate's rule), and once
-            # every run of this commit has finished, nothing is left that could report it.
-            result = "refused"
-        return {"result": result, "gated": True, "sha": sha, **data}
-    if UNGATED_MARK in err:
+    if data is not None and data.get("onboarded") is not False:
+        return {"result": classify_gated(data), "gated": True, "sha": sha, **data}
+    if rc == UNGATED_EXIT or UNGATED_MARK in err:
         checks = backend.checks(repo, sha)
         return {"result": classify_ungated(checks), "gated": False, "sha": sha, "checks": checks}
     raise ChangeError(f"the gate could not decide {repo}@{sha[:12]}: {err}")
