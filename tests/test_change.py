@@ -267,6 +267,16 @@ def test_status_of_an_ungated_repo_is_strict(world, monkeypatch):
     assert qq("status", check=False).returncode == 1   # a run that never ran its jobs verified nothing
 
 
+def test_an_ungated_repo_lands_with_squash_by_default(world, monkeypatch):
+    monkeypatch.setenv("FAKE_GATE_REPOS", "other")
+    qq("upload")
+    sha = world.head()
+    world.set_checks(sha, {"lint": "success"})
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed"}))
+    qq("land", "--notify", "true", "--interval", "0.2", "--deadline", "60")
+    assert world.read()["merges"] == [["1", "--repo", REPO, "--auto", "--squash", "--match-head-commit", sha]]
+
+
 def test_a_gate_error_naming_the_ungated_case_is_not_ungated(world, monkeypatch):
     qq("upload")
     world.set_checks(world.head(), {"lint": "success"})
