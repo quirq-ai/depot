@@ -2,7 +2,11 @@
 # at main and runs `qq sync` in it from this depot checkout, so the toolchains come from public
 # ghcr anonymously, exactly as on a laptop. Then each pinned toolchain must run at its pinned
 # version, and a second `qq sync` must reuse the sealed store entries.
-# Runs nightly, on demand, and on PRs that change this file.
+# Runs nightly, on demand, and on PRs that change this file. The products are cloned at main, not
+# pinned, so a red nightly can come from a product change as well as from qq or a toolchain.
+# There is no setup-python on purpose: `bin/qq` runs on the image's own python3, as on a fresh machine.
+# TODO(suraj): the per-toolchain smoke checks below name tools, which a core repo avoids (AGENTS.md);
+# move them to toolchains or replace them with a tool-blind check once one exists.
 name: e2e-sync
 on:
   workflow_dispatch:
@@ -14,7 +18,7 @@ permissions:
   contents: read
 concurrency:
   group: e2e-sync-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   sync:
     strategy:
@@ -23,6 +27,9 @@ jobs:
         repo: [xo-space, innernet]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash  # -eo pipefail
     steps:
       # The runner context is not available in job-level env, so these are set here.
       - name: paths
@@ -53,9 +60,14 @@ jobs:
               want=$(pinned node)
               test -n "$want"
               test "$(.qq/toolchains/node/bin/node --version)" = "v$want"
-              PATH="$PWD/.qq/toolchains/node/bin:$PATH" pnpm --version
+              # The pnpm the node toolchain bundles (toolchains/node/toolchain.toml).
+              test "$(PATH="$PWD/.qq/toolchains/node/bin:$PATH" pnpm --version)" = 11.28.2
               ;;
           esac
-      - name: a second qq sync reuses the sealed store
+      # With the network cut, a second sync can only pass by reusing the checked store entries.
+      - name: a second qq sync reuses the sealed store, offline
         working-directory: ${{ env.PRODUCT }}
-        run: "$GITHUB_WORKSPACE/bin/qq sync"
+        run: |
+          dead=http://127.0.0.1:9
+          env HTTPS_PROXY=$dead https_proxy=$dead HTTP_PROXY=$dead http_proxy=$dead NO_PROXY= no_proxy= \
+            "$GITHUB_WORKSPACE/bin/qq" sync
