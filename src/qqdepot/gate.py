@@ -20,7 +20,7 @@ import tomllib
 from pathlib import Path
 
 from qqdepot.backends import ChangeError
-from qqdepot.pin import qq_home
+from qqdepot.pin import git_env, qq_home
 
 # TODO(expert): let rollers move this pin, with the qqsync and qqrecipes pins in pyproject.toml.
 GATE_SOURCE = "https://github.com/quirq-ai/gate"
@@ -45,10 +45,9 @@ UNGATED_EXIT = 3
 
 
 def _git(cwd: Path, *args: str) -> str:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
         return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
-                              text=True, env=env).stdout.strip()
+                              text=True, env=git_env()).stdout.strip()
     except subprocess.CalledProcessError as e:
         raise ChangeError(f"git {' '.join(args)} failed: {e.stderr.strip()}") from None
 

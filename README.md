@@ -68,6 +68,9 @@ qq sync                                        # inside a repo: fetch every pin,
 
 `qq sync` reads the manifest's `[toolchains]` and `[deps]` through `sync` and fetches each pin
 once per machine into `$QQ_HOME/store`, checked against its digest. A tarball is unpacked. The
+entry is then read only, and each `qq sync` checks it is unchanged before linking it again; a
+changed entry is refused (remove it with `chmod -R u+w ENTRY && rm -rf ENTRY` and sync again). Git
+fetches run over https, ssh and file only. The
 pin is then linked at `<repo>/.qq/toolchains/<name>` or `<repo>/.qq/deps/<name>`. The source's
 scheme picks the fetcher:
 

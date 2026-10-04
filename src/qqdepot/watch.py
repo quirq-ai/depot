@@ -64,18 +64,26 @@ def spawn(kind: str, backend: str, change: Change, notify: str | None,
         cmd += ["--method", method]
     if enqueued:
         cmd.append("--enqueued")
+    # The watcher runs from $QQ_HOME, not the verdicts directory it writes, which may be removed.
     with log.open("a") as fh:   # append: an earlier watcher of this commit may still be writing
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
-                             cwd=out.parent, start_new_session=True, close_fds=True)
+                             cwd=qq_home(), start_new_session=True, close_fds=True)
     return {"run_id": rid, "verdict_file": str(out), "log": str(log), "watcher_pid": p.pid}
 
 
 def deliver(rid: str, payload: dict, notify: str | None) -> None:
+    """Write the verdict file, then run the notify command. A verdict file that cannot be written
+    (its directory removed mid-watch, a full disk) still reaches the notify command.
+    The payload carries check names a change's author chose: notify commands read it as data."""
     out = verdict_path(rid)
-    tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, indent=2) + "\n")
-    os.replace(tmp, out)
-    print(f"qq: {rid}: {payload['result']}; verdict in {out}", flush=True)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload, indent=2) + "\n")
+        os.replace(tmp, out)
+        print(f"qq: {rid}: {payload['result']}; verdict in {out}", flush=True)
+    except OSError as e:
+        print(f"qq: {rid}: {payload['result']}; cannot write {out}: {e}", flush=True)
     if not notify:
         return
     try:
