@@ -462,3 +462,9 @@ def test_concurrent_qqs_replace_an_older_entry_once(tmp_path):
         t.join()
     assert errors == [] and len(set(got)) == 1
     assert (got[0] / "bin" / "node").read_text() == "node\n"
+
+
+def test_an_entry_whose_times_moved_but_bytes_did_not_is_still_used(tmp_path):
+    entry = store.ensure(_node(tmp_path))
+    os.utime(entry / "bin" / "node", ns=(1, 1))   # a cache restore that drops times
+    assert store.ensure(_node(tmp_path)) == entry

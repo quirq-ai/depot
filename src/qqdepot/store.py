@@ -100,8 +100,12 @@ def ensure(artifact: Artifact) -> Path:
                 _unpack(blob, staged, artifact)
             try:
                 _seal(staged, artifact)
+                # A directory moves to a new parent only while writable (its ".." changes),
+                # so the top is made read only once it is in place.
                 staged.rename(entry)
+                entry.chmod(entry.stat().st_mode & ~0o222)
             except OSError as e:
+                _unseal(scratch)   # so the scratch directory can be removed without root
                 raise FetchError(f"{artifact.name}: cannot store {entry}: {e}") from None
     return entry
 
@@ -109,12 +113,14 @@ def ensure(artifact: Artifact) -> Path:
 TREE_RECORD = ".qq-tree"
 
 
-def _tree(root: Path) -> str:
-    """One sha256 over every path in `root`: its kind, executable bit, size, modification time and
-    link target. Cheap enough for every reuse, and anything that writes a file changes it.
-    Write bits are left out (qq clears them itself), and so is `__pycache__`, which Python
-    writes into its own install when it runs as root, where write bits stop nothing.
-    TODO(expert): this sees writes, not someone who resets the times with the user's rights."""
+def _tree(root: Path, content: bool = False) -> str:
+    """One sha256 over every path in `root`: its kind, executable bit and link target, and a
+    file's size and modification time, or with `content` its bytes. The stat form is cheap
+    enough for every reuse and changes with any ordinary write; the content form settles it
+    when only times moved (a cache restore or copy that drops nanoseconds).
+    Write bits are left out (qq clears them itself), and so are `__pycache__` directories,
+    which Python writes into its own install when it runs as root, where write bits stop nothing.
+    TODO(expert): a same-size write with its time reset passes the stat form."""
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
@@ -129,10 +135,19 @@ def _tree(root: Path) -> str:
             elif stat.S_ISDIR(st.st_mode):
                 kind, body = "d", ""
             elif stat.S_ISREG(st.st_mode):
-                kind, body = "x" if st.st_mode & 0o111 else "f", f"{st.st_size}:{st.st_mtime_ns}"
+                kind = "x" if st.st_mode & 0o111 else "f"
+                body = _file_sha256(path) if content else f"{st.st_size}:{st.st_mtime_ns}"
             else:
                 kind, body = "?", ""
             h.update(f"{kind} {len(rel)}:{rel} {len(body)}:{body}\n".encode(errors="surrogateescape"))
+    return h.hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
     return h.hexdigest()
 
 
@@ -147,14 +162,22 @@ def _seal(staged: Path, artifact: Artifact) -> None:
             path = Path(dirpath, name)
             if not path.is_symlink() and name != TREE_RECORD:
                 path.chmod(path.stat().st_mode & ~0o222)
-    record.write_text(_tree(staged) + "\n")
+    record.write_text(f"stat {_tree(staged)}\ncontent {_tree(staged, content=True)}\n")
     record.chmod(0o444)
     for dirpath, dirnames, filenames in os.walk(staged, topdown=False):
         for name in dirnames:
             path = Path(dirpath, name)
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode & ~0o222)
-    staged.chmod(staged.stat().st_mode & ~0o222)
+
+
+def _unseal(root: Path) -> None:
+    """Write bits back on every directory under `root`, so it can be deleted."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames:
+            path = Path(dirpath, name)
+            if not path.is_symlink():
+                path.chmod(0o700)
 
 
 def _usable(entry: Path) -> bool:
@@ -163,13 +186,14 @@ def _usable(entry: Path) -> bool:
     if entry.is_symlink() or not entry.is_dir():
         return False
     try:
-        want = (entry / TREE_RECORD).read_text().strip()
-        got = _tree(entry)
+        record = dict(line.split(" ", 1) for line in (entry / TREE_RECORD).read_text().splitlines())
+        same = (_tree(entry) == record.get("stat")
+                or _tree(entry, content=True) == record.get("content"))   # only times moved
     except FileNotFoundError:
         return False
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise FetchError(f"cannot check {entry}: {e}") from None
-    if got != want:
+    if not same:
         raise FetchError(f"{entry} changed after qq fetched it, so it is not shared any more; "
                          f"remove it (chmod -R u+w {entry} && rm -rf {entry}) and run qq sync again")
     return True
@@ -181,11 +205,7 @@ def _remove(entry: Path, store: Path) -> None:
     try:
         entry.chmod(0o700)   # moving a directory to a new parent rewrites its ".."
         entry.rename(aside / "entry")
-        for dirpath, dirnames, filenames in os.walk(aside):
-            for name in dirnames:
-                path = Path(dirpath, name)
-                if not path.is_symlink():
-                    path.chmod(0o700)
+        _unseal(aside)
     except OSError as e:
         raise FetchError(f"cannot replace {entry}, made by an older qq: {e}; remove it and run qq sync again") from None
     finally:
