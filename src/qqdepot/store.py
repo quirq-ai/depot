@@ -10,36 +10,26 @@ A pin (quirq-repo/1) is a source and a digest. The source's scheme picks the fet
 Each pin is fetched once per machine into $QQ_HOME/store/<algo>-<hex>, unpacked when it is a
 tarball, and never changed after.
 
-Pins are resolved, fetched (https, file) and verified (every scheme, git checkouts included) by
-qqsync.pins, so depot only adds the OCI registry download, git checkout and unpacking.
+Pins are resolved, fetched (https, file, oci) and verified (every scheme, git checkouts included)
+by qqsync.pins, so depot only adds the git checkout and unpacking.
 TODO(expert): make store entries read only, so nothing installed into a synced toolchain
 changes the copy other repos share. A half-fetched entry is never visible: it is built in a
 scratch directory and renamed into place.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from qqsync import pins
 
 from qqdepot.pin import qq_home
-
-OCI_ACCEPT = ", ".join([
-    "application/vnd.oci.image.manifest.v1+json",
-    "application/vnd.docker.distribution.manifest.v2+json",
-])
 
 
 class FetchError(Exception):
@@ -99,105 +89,15 @@ def ensure(artifact: Artifact) -> Path:
 
 
 def _fetch_blob(artifact: Artifact, path: Path) -> Path:
-    """Download the artifact's bytes to `path`, checked against the pin by qqsync."""
-    scheme = urllib.parse.urlparse(artifact.source).scheme
+    """Download the artifact's bytes to `path` with qqsync.pins.fetch, which checks them against
+    the pin (https://, file:// and oci:// registry layers)."""
     try:
-        if scheme == "oci":
-            _download_oci(artifact, path)
-            pins.verify_file(artifact.pin, path)
-        else:
-            pins.fetch(artifact.pin, path)  # https:// and file://, verified while downloading
+        pins.fetch(artifact.pin, path)
     except pins.PinError as e:
-        hint = "" if scheme in ("https", "file", "oci") else "; qq sync fetches https://, file://, oci:// and git commit pins"
+        scheme = urllib.parse.urlparse(artifact.source).scheme
+        hint = "" if scheme in ("https", "file", "oci") else "; a git source needs digest = \"git:<commit>\""
         raise FetchError(f"{e}{hint}") from None
     return path
-
-
-def _oci_parts(source: str) -> tuple[str, str, str | None]:
-    """registry, repository and the optional manifest digest of oci://REGISTRY/REPO[@DIGEST]."""
-    rest = source.removeprefix("oci://")
-    rest, _, manifest = rest.partition("@")
-    registry, _, repository = rest.partition("/")
-    if not registry or not repository:
-        raise FetchError(f"{source!r} is not oci://REGISTRY/REPOSITORY[@sha256:...]")
-    return registry, repository, manifest or None
-
-
-class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
-    """Registries redirect blobs to storage hosts; follow only https there."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
-            raise urllib.error.URLError(f"refusing a redirect to {newurl}; only https is followed")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_OPENER = urllib.request.build_opener(_HttpsOnlyRedirects)
-
-
-def _oci_get(url: str, accept: str | None, token: list[str], path: Path | None = None) -> bytes:
-    """GET from a registry, answering one bearer-token challenge anonymously (public packages).
-
-    With `path`, stream the body there and return b"".
-    """
-    for attempt in range(2):
-        request = urllib.request.Request(url, headers={"Accept": accept} if accept else {})
-        if token:
-            # Unredirected: the token is for the registry, never for the storage host a blob
-            # redirects to (which carries its own signed URL).
-            request.add_unredirected_header("Authorization", f"Bearer {token[0]}")
-        try:
-            with _OPENER.open(request, timeout=120) as r:
-                if path is None:
-                    return r.read()
-                with path.open("wb") as out:
-                    shutil.copyfileobj(r, out, 1 << 20)
-                return b""
-        except urllib.error.HTTPError as e:
-            challenge = e.headers.get("WWW-Authenticate", "")
-            if e.code != 401 or attempt or not challenge.lower().startswith("bearer "):
-                hint = " (is the package public?)" if e.code in (401, 403) else ""
-                raise FetchError(f"cannot fetch {url}: HTTP {e.code}{hint}") from None
-            token[:] = [_anonymous_token(challenge)]
-        except (OSError, ValueError) as e:
-            raise FetchError(f"cannot fetch {url}: {e}") from None
-    raise AssertionError("unreachable")
-
-
-def _anonymous_token(challenge: str) -> str:
-    fields = {k: v for k, v in re.findall(r'(\w+)="([^"]*)"', challenge)}
-    if "realm" not in fields:
-        raise FetchError(f"registry asked for a token without a realm: {challenge!r}")
-    query = urllib.parse.urlencode({k: fields[k] for k in ("service", "scope") if k in fields})
-    try:
-        sep = "&" if "?" in fields["realm"] else "?"
-        with _OPENER.open(f"{fields['realm']}{sep}{query}", timeout=60) as r:
-            body = json.load(r)
-    except (OSError, ValueError) as e:
-        raise FetchError(f"cannot get a registry token from {fields['realm']}: {e}") from None
-    token = body.get("token") or body.get("access_token")
-    if not token:
-        raise FetchError(f"registry token endpoint {fields['realm']} returned no token")
-    return token
-
-
-def _download_oci(artifact: Artifact, path: Path) -> None:
-    registry, repository, manifest_digest = _oci_parts(artifact.source)
-    # Plain http is allowed only for a registry on this machine (tests, a local mirror).
-    local = registry.split(":")[0] in ("127.0.0.1", "localhost", "[::1]")
-    scheme = "http" if local and os.environ.get("QQ_OCI_SCHEME") == "http" else "https"
-    base = f"{scheme}://{registry}/v2/{repository}"
-    token: list[str] = []
-    if manifest_digest:
-        # The source names a manifest: the pinned layer must be in it, so a pin cannot pair one
-        # artifact's manifest with another's bytes.
-        raw = _oci_get(f"{base}/manifests/{manifest_digest}", OCI_ACCEPT, token)
-        if f"sha256:{hashlib.sha256(raw).hexdigest()}" != manifest_digest:
-            raise FetchError(f"{artifact.name}: manifest {manifest_digest} does not match its digest")
-        layers = [layer.get("digest") for layer in json.loads(raw).get("layers", [])]
-        if artifact.digest not in layers:
-            raise FetchError(f"{artifact.name}: manifest {manifest_digest} has no layer {artifact.digest}")
-    _oci_get(f"{base}/blobs/{artifact.digest}", None, token, path)
 
 
 def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:
