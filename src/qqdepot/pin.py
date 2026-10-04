@@ -163,7 +163,7 @@ def pip_install(python: Path, *targets: str) -> list[list[str]]:
     dependencies with no index (a PyPI dependency missing from the lock fails here), then a
     consistency check. bootstrap.py repeats this, since it runs before qq is installed."""
     pip = [str(python), "-m", "pip", "--disable-pip-version-check", "--quiet"]
-    return [[*pip, "install", "--require-hashes", "--no-deps", "-r", str(PYPI_LOCK)],
+    return [[*pip, "install", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(PYPI_LOCK)],
             [*pip, "install", "--no-index", "--no-build-isolation", *targets],
             [*pip, "check"]]
 

@@ -78,7 +78,7 @@ def ensure_launcher(depot: Path) -> Path:
                 # As pin.pip_install: PyPI only by hash from the lock, the rest with no index.
                 pip = [str(target / "bin" / "python"), "-m", "pip", "--disable-pip-version-check", "--quiet"]
                 lock = src / "src" / "qqdepot" / "locks" / "pypi.txt"
-                for cmd in ([*pip, "install", "--require-hashes", "--no-deps", "-r", str(lock)],
+                for cmd in ([*pip, "install", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(lock)],
                             [*pip, "install", "--no-index", "--no-build-isolation", str(src)],
                             [*pip, "check"]):
                     subprocess.run(cmd, check=True, capture_output=True)
