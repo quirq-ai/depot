@@ -13,8 +13,9 @@ git: digest, have been installed from that commit), so a tag or archive that hol
 something else is an error, not a silent mismatch.
 
 A pin installs only from the depot ($QQ_DEPOT_URL, default quirq-ai/depot) or from a
-source the user lists in $QQ_TRUSTED_SOURCES: a pull request that edits the manifest
-cannot make `qq status` run code from a host of its choosing.
+source the user lists in $QQ_TRUSTED_SOURCES, and a git: commit must be on a branch or
+tag there: a pull request that edits the manifest cannot make `qq status` run code from
+a host, or a fork, of its choosing.
 TODO(suraj): protect v* tags in quirq-ai/depot (a version-only pin trusts the tag), and
 bump __version__ with each release so a version names one commit.
 """
@@ -137,10 +138,9 @@ def trusted(source: str) -> bool:
 
 
 def check(pin: Pin) -> None:
-    """Refuse a pin that would install from an untrusted place or without fixed bytes."""
+    """Refuse a pin that would install from an untrusted place or without fixed bytes.
+    (The quirq-repo/1 schema already makes source and digest come together.)"""
     if pin.source is None:
-        if pin.digest and not pin.digest.startswith("git:"):
-            raise PinError(f"{pin.manifest}: a sha256 digest needs the source archive it names")
         return
     if not pin.digest:
         raise PinError(f"{pin.manifest}: [qq] source needs a digest (git:<commit> or sha256:<archive>)")
@@ -179,13 +179,34 @@ def _fetch_archive(pin: Pin, into: Path) -> Path:
 
 def requirement(pin: Pin, scratch: Path) -> str:
     """What pip installs for this pin."""
-    algo, _, value = (pin.digest or "").partition(":")
     if pin.source is None:
-        base = os.environ.get("QQ_DEPOT_URL", DEFAULT_DEPOT_URL)
-        return f"git+{base}@{value if algo == 'git' else 'v' + pin.version}"
+        return f"git+{os.environ.get('QQ_DEPOT_URL') or DEFAULT_DEPOT_URL}@v{pin.version}"
+    algo, _, value = pin.digest.partition(":")
     if algo == "git":
+        _published(pin.source, value)
         return f"git+{pin.source}@{value}"
     return str(_fetch_archive(pin, scratch))
+
+
+def _published(source: str, commit: str) -> None:
+    """Refuse a commit no branch or tag of `source` contains. GitHub serves any commit of a
+    repository's fork network by its id, so a trusted URL alone would let a fork's code in."""
+    with tempfile.TemporaryDirectory(prefix="qq-pin-") as tmp:
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True, text=True,
+                                  env=git_env()).stdout
+        try:
+            git("init", "-q", "--bare")
+            git("fetch", "-q", "--filter=blob:none", "--no-tags", "--end-of-options", source,
+                "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+            holders = git("for-each-ref", f"--contains={commit}", "--format=%(refname)")
+        except subprocess.CalledProcessError:
+            holders = ""   # also when the commit is not there at all
+        except OSError as e:
+            raise PinError(f"cannot run git to check {source}@{commit[:12]}: {e}") from None
+    if not holders.strip():
+        raise PinError(f"{commit} is on no branch or tag of {source}, so it is not that repo's code; "
+                       "pin a commit that is merged there")
 
 
 def installed_commit(target: Path) -> str | None:
