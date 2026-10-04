@@ -108,7 +108,8 @@ def _fetch_blob(artifact: Artifact, path: Path) -> Path:
         else:
             pins.fetch(artifact.pin, path)  # https:// and file://, verified while downloading
     except pins.PinError as e:
-        raise FetchError(f"{e}; qq sync fetches https://, file://, oci:// and git commit pins") from None
+        hint = "" if scheme in ("https", "file", "oci") else "; qq sync fetches https://, file://, oci:// and git commit pins"
+        raise FetchError(f"{e}{hint}") from None
     return path
 
 
