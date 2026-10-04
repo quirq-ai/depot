@@ -1,0 +1,21 @@
+# Hand-written until infra-config generates this repo's presubmit (V0-CFG-02).
+# Runs on every PR and in the merge queue, so the gate sees the exact merge result.
+name: presubmit
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --quiet -e ".[test]"
+      - run: python -m pytest -q -p no:cacheprovider
