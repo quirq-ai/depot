@@ -8,7 +8,13 @@ A pin (quirq-repo/1) is a source and a digest. The source's scheme picks the fet
     any git URL + git:<commit>     a source tree at that commit
 
 Each pin is fetched once per machine into $QQ_HOME/store/<algo>-<hex>, unpacked when it is a
-tarball, and never changed after. A half-fetched entry is never visible: it is built in a
+tarball, and never changed after.
+
+TODO(expert): use qqsync.pins (find_pin, fetch, verify_checkout; V0-SYN-03) for the https, file
+and git paths once depot and recipes move their qqsync pin past it together; pip refuses two
+different pins of one package. Keep only the OCI fetch and unpacking here.
+TODO(expert): make store entries read only, so nothing installed into a synced toolchain
+changes the copy other repos share. A half-fetched entry is never visible: it is built in a
 scratch directory and renamed into place.
 """
 from __future__ import annotations
@@ -17,6 +23,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tarfile
@@ -127,7 +134,7 @@ def _sha256(path: Path) -> str:
 def _download(url: str, path: Path, headers: dict[str, str]) -> None:
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response, path.open("wb") as out:
+        with _OPENER.open(request, timeout=120) as response, path.open("wb") as out:
             shutil.copyfileobj(response, out)
     except (OSError, ValueError) as e:
         raise FetchError(f"cannot download {url}: {e}") from None
@@ -143,15 +150,36 @@ def _oci_parts(source: str) -> tuple[str, str, str | None]:
     return registry, repository, manifest or None
 
 
-def _oci_get(url: str, accept: str | None, token: list[str]) -> bytes:
-    """GET from a registry, answering one bearer-token challenge anonymously (public packages)."""
+class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Registries redirect blobs to storage hosts; follow only https there."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            raise urllib.error.URLError(f"refusing a redirect to {newurl}; only https is followed")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_HttpsOnlyRedirects)
+
+
+def _oci_get(url: str, accept: str | None, token: list[str], path: Path | None = None) -> bytes:
+    """GET from a registry, answering one bearer-token challenge anonymously (public packages).
+
+    With `path`, stream the body there and return b"".
+    """
     for attempt in range(2):
-        headers = {"Accept": accept} if accept else {}
+        request = urllib.request.Request(url, headers={"Accept": accept} if accept else {})
         if token:
-            headers["Authorization"] = f"Bearer {token[0]}"
+            # Unredirected: the token is for the registry, never for the storage host a blob
+            # redirects to (which carries its own signed URL).
+            request.add_unredirected_header("Authorization", f"Bearer {token[0]}")
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as r:
-                return r.read()
+            with _OPENER.open(request, timeout=120) as r:
+                if path is None:
+                    return r.read()
+                with path.open("wb") as out:
+                    shutil.copyfileobj(r, out, 1 << 20)
+                return b""
         except urllib.error.HTTPError as e:
             challenge = e.headers.get("WWW-Authenticate", "")
             if e.code != 401 or attempt or not challenge.lower().startswith("bearer "):
@@ -164,13 +192,13 @@ def _oci_get(url: str, accept: str | None, token: list[str]) -> bytes:
 
 
 def _anonymous_token(challenge: str) -> str:
-    fields = dict(part.split("=", 1) for part in challenge[len("bearer "):].split(",") if "=" in part)
-    fields = {k.strip(): v.strip().strip('"') for k, v in fields.items()}
+    fields = {k: v for k, v in re.findall(r'(\w+)="([^"]*)"', challenge)}
     if "realm" not in fields:
         raise FetchError(f"registry asked for a token without a realm: {challenge!r}")
     query = urllib.parse.urlencode({k: fields[k] for k in ("service", "scope") if k in fields})
     try:
-        with urllib.request.urlopen(f"{fields['realm']}?{query}", timeout=60) as r:
+        sep = "&" if "?" in fields["realm"] else "?"
+        with _OPENER.open(f"{fields['realm']}{sep}{query}", timeout=60) as r:
             body = json.load(r)
     except (OSError, ValueError) as e:
         raise FetchError(f"cannot get a registry token from {fields['realm']}: {e}") from None
@@ -182,7 +210,9 @@ def _anonymous_token(challenge: str) -> str:
 
 def _download_oci(artifact: Artifact, path: Path) -> None:
     registry, repository, manifest_digest = _oci_parts(artifact.source)
-    scheme = os.environ.get("QQ_OCI_SCHEME", "https")  # http only for a local test registry
+    # Plain http is allowed only for a registry on this machine (tests, a local mirror).
+    local = registry.split(":")[0] in ("127.0.0.1", "localhost", "[::1]")
+    scheme = "http" if local and os.environ.get("QQ_OCI_SCHEME") == "http" else "https"
     base = f"{scheme}://{registry}/v2/{repository}"
     token: list[str] = []
     if manifest_digest:
@@ -194,14 +224,16 @@ def _download_oci(artifact: Artifact, path: Path) -> None:
         layers = [layer.get("digest") for layer in json.loads(raw).get("layers", [])]
         if artifact.digest not in layers:
             raise FetchError(f"{artifact.name}: manifest {manifest_digest} has no layer {artifact.digest}")
-    path.write_bytes(_oci_get(f"{base}/blobs/{artifact.digest}", None, token))
+    _oci_get(f"{base}/blobs/{artifact.digest}", None, token, path)
 
 
 def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:
     if tarfile.is_tarfile(blob):
         try:
             with tarfile.open(blob) as archive:
-                archive.extractall(into, filter="tar")  # keeps modes; still refuses paths outside `into`
+                # "data" refuses absolute paths, links that leave `into` and device files, and keeps
+                # executable bits and in-tree symlinks, which is all a toolchain needs.
+                archive.extractall(into, filter="data")
         except (tarfile.TarError, OSError) as e:
             raise FetchError(f"{artifact.name}: cannot unpack {artifact.source}: {e}") from None
     else:
@@ -211,18 +243,23 @@ def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:
 
 
 def _fetch_git(artifact: Artifact, into: Path) -> None:
+    if artifact.source.startswith("-"):
+        raise FetchError(f"{artifact.name}: {artifact.source!r} is not a repository URL")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # GIT_DIR would override -C
+
     def git(*args: str) -> None:
         try:
-            subprocess.run(["git", "-C", str(into), *args], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(into), *args], check=True, capture_output=True, text=True, env=env)
         except subprocess.CalledProcessError as e:
             raise FetchError(f"{artifact.name}: git {' '.join(args)} failed: {e.stderr.strip()}") from None
         except OSError as e:
             raise FetchError(f"{artifact.name}: cannot run git: {e}") from None
 
     into.mkdir()
-    git("init", "-q")
-    git("fetch", "-q", "--depth=1", artifact.source, artifact.value)
+    git("init", "-q", f"--object-format={'sha256' if len(artifact.value) == 64 else 'sha1'}")
+    git("fetch", "-q", "--depth=1", "--end-of-options", artifact.source, artifact.value)
     git("checkout", "-q", "--detach", "FETCH_HEAD")
-    head = subprocess.run(["git", "-C", str(into), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "-C", str(into), "rev-parse", "HEAD"], capture_output=True, text=True,
+                          env=env).stdout.strip()
     if head != artifact.value:
         raise FetchError(f"{artifact.name}: {artifact.source} gave commit {head}, not {artifact.value}")

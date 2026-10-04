@@ -220,3 +220,61 @@ def test_oci_toolchain(tmp_path, monkeypatch, registry):
     bad = store.Artifact("hello", f"oci://{registry}/tc/hello@{sha256(manifest)}", sha256(other))
     with pytest.raises(store.FetchError, match="has no layer"):
         store.ensure(bad)
+
+
+def test_archive_cannot_write_outside_the_store(tmp_path):
+    """A hard link to an outside file, then a member of the same name, must not touch that file."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("safe\n")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        link = tarfile.TarInfo("hl")
+        link.type, link.linkname = tarfile.LNKTYPE, str(victim)
+        tar.addfile(link)
+        data = b"pwned\n"
+        member = tarfile.TarInfo("hl")
+        member.size = len(data)
+        tar.addfile(member, io.BytesIO(data))
+    archive = tmp_path / "evil.tar.gz"
+    archive.write_bytes(buf.getvalue())
+    with pytest.raises(store.FetchError, match="cannot unpack"):
+        store.ensure(store.Artifact("evil", archive.as_uri(), sha256(archive.read_bytes())))
+    assert victim.read_text() == "safe\n"
+
+
+def test_git_source_cannot_be_an_option(tmp_path):
+    marker = tmp_path / "PWNED"
+    bad = store.Artifact("dep", f"--upload-pack=touch {marker};false", "git:" + "a" * 40)
+    with pytest.raises(store.FetchError, match="not a repository URL"):
+        store.ensure(bad)
+    assert not marker.exists()
+
+
+def test_registry_token_is_not_sent_on_redirects(monkeypatch, tmp_path):
+    seen = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_open(request, timeout):
+        seen.append(request)
+        return Response(b"blob")
+
+    monkeypatch.setattr(store._OPENER, "open", fake_open)
+    store._oci_get("https://registry.invalid/v2/r/blobs/x", None, ["tok"], tmp_path / "blob")
+    (request,) = seen
+    assert request.unredirected_hdrs["Authorization"] == "Bearer tok"
+    assert "Authorization" not in request.headers
+
+
+def test_plain_http_only_for_a_local_registry(monkeypatch):
+    monkeypatch.setenv("QQ_OCI_SCHEME", "http")
+    urls = []
+    monkeypatch.setattr(store, "_oci_get", lambda url, *a, **k: urls.append(url) or b"")
+    art = store.Artifact("t", "oci://registry.example/r", "sha256:" + "a" * 64)
+    store._download_oci(art, Path("/dev/null"))
+    assert urls[-1].startswith("https://registry.example/")

@@ -30,7 +30,9 @@ SECTIONS = (("toolchains", TOOLCHAINS), ("deps", DEPS))
 def _link(target: Path, link: Path) -> None:
     """Point `link` at `target`, replacing what was there in one step."""
     link.parent.mkdir(parents=True, exist_ok=True)
-    tmp = link.with_name(f".{link.name}.tmp")
+    if link.exists() and not link.is_symlink():
+        raise store.FetchError(f"{link} is not a link qq made; move it away and run qq sync again")
+    tmp = link.with_name(f".{link.name}.{os.getpid()}.tmp")
     tmp.unlink(missing_ok=True)
     tmp.symlink_to(target, target_is_directory=True)
     os.replace(tmp, link)
@@ -65,7 +67,7 @@ def run_sync(args: argparse.Namespace) -> int:
         return 2
     try:
         sync(root)
-    except (ManifestError, store.FetchError) as e:
+    except (ManifestError, store.FetchError, OSError) as e:
         print(f"qq: {e}", file=sys.stderr)
         return 1
     return 0
@@ -86,8 +88,8 @@ def run_fetch(args: argparse.Namespace) -> int:
         return 1
     try:
         sync(directory.resolve())
-    except (ManifestError, store.FetchError) as e:
-        print(f"qq: {e}", file=sys.stderr)
+    except (ManifestError, store.FetchError, OSError) as e:
+        print(f"qq: {e}\nqq: cloned into {directory}; fix the problem and run qq sync there", file=sys.stderr)
         return 1
     return 0
 
