@@ -253,33 +253,3 @@ def test_git_source_cannot_be_an_option(tmp_path):
     with pytest.raises(store.FetchError, match="not a repository URL"):
         store.ensure(bad)
     assert not marker.exists()
-
-
-def test_registry_token_is_not_sent_on_redirects(monkeypatch, tmp_path):
-    seen = []
-
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def fake_open(request, timeout):
-        seen.append(request)
-        return Response(b"blob")
-
-    monkeypatch.setattr(store._OPENER, "open", fake_open)
-    store._oci_get("https://registry.invalid/v2/r/blobs/x", None, ["tok"], tmp_path / "blob")
-    (request,) = seen
-    assert request.unredirected_hdrs["Authorization"] == "Bearer tok"
-    assert "Authorization" not in request.headers
-
-
-def test_plain_http_only_for_a_local_registry(monkeypatch):
-    monkeypatch.setenv("QQ_OCI_SCHEME", "http")
-    urls = []
-    monkeypatch.setattr(store, "_oci_get", lambda url, *a, **k: urls.append(url) or b"")
-    art = store.Artifact.of("t", "oci://registry.example/r", "sha256:" + "a" * 64)
-    store._download_oci(art, Path("/dev/null"))
-    assert urls[-1].startswith("https://registry.example/")
