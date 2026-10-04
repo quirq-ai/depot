@@ -1,0 +1,9 @@
+# Every PyPI package a qq environment (launcher, pinned version, gate) may install, with the
+# build backend. Installs take only these, by hash; git dependencies (qqsync, qqrecipes, the
+# gate) come by pinned commit with no index, so nothing unpinned reaches the user's token.
+# When a pinned repo adds or bumps a PyPI dependency, add it here and regenerate:
+#   uv pip compile --universal --python-version 3.11 --generate-hashes src/qqdepot/locks/pypi.in -o src/qqdepot/locks/pypi.txt
+jsonschema==4.26.0   # qqsync, gate
+tomlkit==0.15.1      # qqsync
+pyyaml==6.0.3        # gate
+setuptools==80.9.0   # build backend of every quirq-ai Python repo

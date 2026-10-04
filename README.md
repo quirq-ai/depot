@@ -52,6 +52,12 @@ that edits the manifest cannot make `qq status` run code from a host it picked. 
 digest. A `git:` digest fixes the exact commit, and qq checks pip installed that commit; a
 `sha256:` digest fixes the archive; a version alone trusts the depot tag `v<version>`.
 
+Every qq environment (the launcher, each pinned version, the gate) installs PyPI packages only
+by hash from `src/qqdepot/locks/pypi.txt`, and everything else (qqsync, qqrecipes, the gate) by
+pinned commit with no index, so nothing unpinned runs next to your `gh` token. A pinned repo
+that adds a PyPI dependency needs it added to `locks/pypi.in` and the lock regenerated (the
+command is in that file).
+
 | Variable | Meaning |
 |---|---|
 | `QQ_HOME` | Where launchers and pinned versions live |

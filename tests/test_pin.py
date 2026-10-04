@@ -166,3 +166,17 @@ def test_ensure_rejects_wrong_version(monkeypatch, tmp_path):
 def test_source_without_scheme_is_a_pin_error(tmp_path):
     with pytest.raises(pin.PinError, match="cannot download"):
         pin.requirement(pin.Pin("1.0", "relative/x.tar.gz", "sha256:" + "0" * 64), tmp_path)
+
+
+def test_installs_take_pypi_only_by_hash_and_the_rest_with_no_index(tmp_path):
+    lock, rest, check = pin.pip_install(tmp_path / "python", "git+https://github.com/quirq-ai/depot@" + "a" * 40)
+    assert "--require-hashes" in lock and "--no-deps" in lock and str(pin.PYPI_LOCK) in lock
+    assert "--no-index" in rest and "--no-build-isolation" in rest
+    assert check[-1] == "check"
+    names = [line.split("==")[0] for line in pin.PYPI_LOCK.read_text().splitlines() if "==" in line]
+    assert "setuptools" in names and all("--hash=sha256:" in pin.PYPI_LOCK.read_text() for _ in names)
+
+
+def test_the_bootstrap_uses_the_same_lock():
+    src = (Path(pin.__file__).parent / "bootstrap.py").read_text()
+    assert '"locks" / "pypi.txt"' in src and "--require-hashes" in src and "--no-index" in src

@@ -154,6 +154,20 @@ def is_self(pin: Pin) -> bool:
     return pin.source is None and pin.digest is None and pin.version == __version__
 
 
+PYPI_LOCK = Path(__file__).parent / "locks" / "pypi.txt"
+
+
+def pip_install(python: Path, *targets: str) -> list[list[str]]:
+    """The pip commands that install `targets` into the environment of `python` with nothing
+    unpinned: PyPI packages only from the hashed lock, then the targets and their git
+    dependencies with no index (a PyPI dependency missing from the lock fails here), then a
+    consistency check. bootstrap.py repeats this, since it runs before qq is installed."""
+    pip = [str(python), "-m", "pip", "--disable-pip-version-check", "--quiet"]
+    return [[*pip, "install", "--require-hashes", "--no-deps", "-r", str(PYPI_LOCK)],
+            [*pip, "install", "--no-index", "--no-build-isolation", *targets],
+            [*pip, "check"]]
+
+
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(cmd, check=True, text=True, capture_output=True, **kwargs)
@@ -247,8 +261,8 @@ def ensure(pin: Pin) -> Path:
         try:
             with tempfile.TemporaryDirectory(dir=versions, prefix=f".{pin.key}.") as scratch:
                 _run([sys.executable, "-m", "venv", str(target)])
-                _run([str(target / "bin" / "python"), "-m", "pip", "install", "--quiet",
-                      "--disable-pip-version-check", requirement(pin, Path(scratch))])
+                for cmd in pip_install(target / "bin" / "python", requirement(pin, Path(scratch))):
+                    _run(cmd)
             got = installed_version(qq)
             if got != pin.version:
                 raise PinError(f"{pin.manifest} pins qq {pin.version}, but what it names installs qq {got}")

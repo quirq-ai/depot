@@ -20,7 +20,7 @@ import tomllib
 from pathlib import Path
 
 from qqdepot.backends import ChangeError
-from qqdepot.pin import git_env, qq_home
+from qqdepot.pin import git_env, pip_install, qq_home
 
 # TODO(expert): let rollers move this pin, with the qqsync and qqrecipes pins in pyproject.toml.
 GATE_SOURCE = "https://github.com/quirq-ai/gate"
@@ -91,8 +91,7 @@ def ensure() -> tuple[Path, Path]:
             # Policy is read at the commit the gate pins, so qq and CI judge by the same config.
             _checkout(cfg_pin["source"], cfg_pin["commit"], config)
             for cmd in ([sys.executable, "-m", "venv", str(target / "venv")],
-                        [str(target / "venv" / "bin" / "python"), "-m", "pip", "install", "--quiet",
-                         "--disable-pip-version-check", str(target / "gate")]):
+                        *pip_install(target / "venv" / "bin" / "python", str(target / "gate"))):
                 try:
                     subprocess.run(cmd, check=True, capture_output=True, text=True)
                 except subprocess.CalledProcessError as e:
