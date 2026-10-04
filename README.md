@@ -93,6 +93,29 @@ run of one commit execute the same adapter actions and leave the same JUnit XML,
 `results.json` under `<repo>/.qq/out`. Toolchains come from `<repo>/.qq/toolchains/<name>`, where
 `qq sync` unpacks them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
 
+## Send a change through the gate
+
+```sh
+qq upload [--title T] [--draft]   # push this branch, open or update its change
+qq try [CHANGE] [--notify CMD]    # upload, print a run ID and exit; the verdict is pushed later
+qq land [CHANGE] [--notify CMD]   # land once the gate passes (merge queue); returns at once
+qq status [CHANGE]                # the gate's verdict now: exit 0 pass, 1 refused, 3 pending
+```
+
+Acknowledge, then push: `qq try` and `qq land` return a run ID at once, so an agent never holds a
+tool call open while CI runs. A watcher follows the change and delivers the verdict (pass,
+refused, landed, superseded by a newer push, closed, timed-out or error) to
+`$QQ_HOME/verdicts/<run ID>.json` and to the `--notify` command (default `$QQ_NOTIFY`), which
+gets the verdict JSON on stdin and `QQ_VERDICT` in its environment. An agent harness plugs its own
+channel in there.
+
+qq does not decide what must pass. It runs [gate](https://github.com/quirq-ai/gate)'s `qqgate`
+at the commit `src/qqdepot/gate.py` pins, in its own environment under `$QQ_HOME/gate`, with
+infra-config at the commit the gate pins. A repo infra-config does not list is reported as
+ungated, from the backend's own checks. On GitHub the commands are thin wrappers over `gh`
+(signed in with `gh auth login`); backend code sits in `src/qqdepot/backends/<backend>.py`,
+picked by `--backend` or `$QQ_BACKEND`.
+
 ## Subcommands from other repos
 
 A package adds a `qq` subcommand with an entry point in the `qq.commands` group naming a function
@@ -115,6 +138,6 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | #4 | merged; a fresh clone builds after `qq sync` alone in `tests/test_sync.py`. The xo-space and innernet runs wait on public ghcr packages (suraj), promoted pins (V0-TCH-03) and onboarding manifests |
 | V0-DEP-03 | `qq build` and `qq test` | #3, #5 | merged; presubmit `parity` runs `qq test` and `qqrecipes execute` on xo-space and innernet on separate runners and compares their JUnit. Manifests are sync's onboarding fixtures until onboarding lands the real ones |
-| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | | waiting on V0-GAT-01 |
+| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | | in review; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the delivered workflows (xo-space #211, innernet #37) and the rulesets (V0-ORG-03) |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.

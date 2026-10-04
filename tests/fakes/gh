@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""A fake `gh` for tests: the subset qq's GitHub backend calls, with state in $FAKE_GH_STATE.
+
+Change heads come from the real bare repo the test pushes to ($FAKE_ORIGIN), so a push moves them.
+"""
+import json
+import os
+import subprocess
+import sys
+
+STATE = os.environ["FAKE_GH_STATE"]
+FIELDS = ("number", "url", "state", "headRefOid", "baseRefName", "headRefName")
+
+
+def load():
+    with open(STATE) as f:
+        return json.load(f)
+
+
+def save(s):
+    tmp = f"{STATE}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(s, f)
+    os.replace(tmp, STATE)
+
+
+def opt(args, name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def head(branch):
+    return subprocess.run(["git", "--git-dir", os.environ["FAKE_ORIGIN"], "rev-parse", f"refs/heads/{branch}"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def pr_json(s, pr):
+    out = dict(pr)
+    if out["state"] == "OPEN":   # an open change follows its branch
+        out["headRefOid"] = head(out["headRefName"])
+    return {k: out[k] for k in FIELDS}
+
+
+def main(args):
+    s = load()
+    s["calls"].append(args)
+    save(s)
+    prs = s["prs"]
+    match args[:2]:
+        case ["auth", "token"]:
+            print(s["token"])
+        case ["repo", "view"]:
+            print(s["default_branch"] if "defaultBranchRef" in args else s["repo"])
+        case ["pr", "list"]:
+            found = [pr_json(s, p) for p in prs.values()
+                     if p["headRefName"] == opt(args, "--head") and p["state"] == "OPEN"]
+            print(json.dumps(found[:1]))
+        case ["pr", "create"]:
+            n = len(prs) + 1
+            branch = opt(args, "--head")
+            prs[str(n)] = {"number": n, "url": f"https://github.com/{s['repo']}/pull/{n}", "state": "OPEN",
+                           "headRefOid": head(branch), "baseRefName": opt(args, "--base"), "headRefName": branch,
+                           "title": opt(args, "--title", "(from commits)")}
+            save(s)
+            print(prs[str(n)]["url"])
+        case ["pr", "view"]:
+            ref = args[2].rsplit("/", 1)[-1]
+            pr = prs.get(ref) or next((p for p in prs.values() if p["headRefName"] == ref), None)
+            if pr is None:
+                print(f"no pull requests found for {args[2]}", file=sys.stderr)
+                return 1
+            print(json.dumps(pr_json(s, pr)))
+        case ["pr", "merge"]:
+            if opt(args, "--match-head-commit") != pr_json(s, prs[args[2]])["headRefOid"]:
+                print("head moved", file=sys.stderr)
+                return 1
+            s["merges"].append(args[2:])
+            save(s)
+        case ["run", "list"]:
+            print(json.dumps([{"databaseId": i} for i in s["runs"].get(opt(args, "--commit"), [])]))
+        case ["api", "--paginate"]:
+            sha = args[2].split("/commits/")[1].split("/")[0]
+            for name, state in s["checks"].get(sha, {}).items():
+                print(json.dumps({"name": name, "state": state, "started": "2026-10-04T12:00:00Z"}))
+        case _:
+            print(f"fake gh: unsupported {args}", file=sys.stderr)
+            return 1
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))
