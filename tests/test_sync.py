@@ -399,3 +399,66 @@ def test_a_member_named_twice_is_refused(tmp_path):
     archive = _tar(tmp_path, [("a", "sym", "b"), ("a", "file", b"x")])
     with pytest.raises(store.FetchError, match="appears twice"):
         store.ensure(store.Artifact.of("twice", archive.as_uri(), sha256(archive.read_bytes())))
+def _node(tmp_path):
+    archive = _tar(tmp_path, [("bin", "dir", None), ("bin/node", "file", b"node\n")])
+    return store.Artifact.of("node", archive.as_uri(), sha256(archive.read_bytes()))
+
+
+def test_a_store_entry_is_read_only_and_checked_again_on_reuse(tmp_path):
+    artifact = _node(tmp_path)
+    entry = store.ensure(artifact)
+    assert all(not p.stat().st_mode & 0o222 for p in [entry, *entry.rglob("*")])
+    if os.geteuid() != 0:   # root writes through any mode
+        with pytest.raises(PermissionError):
+            (entry / "bin" / "installed-by-a-build").write_text("x")
+    (entry / "bin").chmod(0o755)
+    (entry / "bin" / "installed-by-a-build").write_text("x")   # something with the user's rights
+    with pytest.raises(store.FetchError, match="changed after qq fetched it"):
+        store.ensure(artifact)
+
+
+def test_an_entry_from_an_older_qq_is_fetched_again(tmp_path):
+    artifact = _node(tmp_path)
+    old = store.store_dir() / f"{artifact.algo}-{artifact.value}"
+    (old / "bin").mkdir(parents=True)
+    (old / "bin" / "node").write_text("tampered before records\n")
+    entry = store.ensure(artifact)
+    assert (entry / "bin" / "node").read_text() == "node\n"
+    assert (entry / store.TREE_RECORD).is_file()
+    assert [p.name for p in store.store_dir().iterdir() if p.name.startswith(".old-")] == []
+
+
+def test_git_runs_only_over_https_ssh_and_file(tmp_path):
+    bad = store.Artifact.of("dep", "git://127.0.0.1:1/x", "git:" + "a" * 40)
+    with pytest.raises(store.FetchError, match="not allowed"):
+        store.ensure(bad)
+
+
+def test_python_bytecode_written_into_an_entry_is_not_a_change(tmp_path):
+    entry = store.ensure(_node(tmp_path))
+    (entry / "bin").chmod(0o755)
+    (entry / "bin" / "__pycache__").mkdir()   # Python as root ignores the write bits
+    (entry / "bin" / "__pycache__" / "x.pyc").write_bytes(b"\0")
+    assert store.ensure(_node(tmp_path)) == entry
+
+
+def test_concurrent_qqs_replace_an_older_entry_once(tmp_path):
+    artifact = _node(tmp_path)
+    old = store.store_dir() / f"{artifact.algo}-{artifact.value}"
+    (old / "bin").mkdir(parents=True)
+    (old / "bin" / "node").write_text("old\n")
+    got, errors = [], []
+
+    def run():
+        try:
+            got.append(store.ensure(artifact))
+        except Exception as e:   # noqa: BLE001 - surfaced by the assert below
+            errors.append(e)
+
+    threads = [threading.Thread(target=run) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(set(got)) == 1
+    assert (got[0] / "bin" / "node").read_text() == "node\n"

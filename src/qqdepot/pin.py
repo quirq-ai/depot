@@ -63,6 +63,20 @@ def qq_home() -> Path:
     return Path(cache) / "qq"
 
 
+# The caller's GIT_* that only say how to reach a remote (keys, proxies, CAs, prompts).
+# Any other GIT_* is dropped: GIT_DIR and its kin would point git at another repository.
+GIT_KEEP = frozenset({"GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_ASKPASS", "GIT_PROXY_COMMAND",
+                      "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_TERMINAL_PROMPT", "GIT_HTTP_USER_AGENT"})
+
+
+def git_env() -> dict[str, str]:
+    """The environment qq fetches with git in: only the https, ssh and file transports, for
+    submodules and redirects too."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") or k in GIT_KEEP}
+    env["GIT_ALLOW_PROTOCOL"] = "https:ssh:file"
+    return env
+
+
 def find_manifest(start: Path) -> Path | None:
     """The nearest infra/repo.toml at or above `start`."""
     for directory in (start, *start.parents):

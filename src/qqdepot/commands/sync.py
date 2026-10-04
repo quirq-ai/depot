@@ -22,7 +22,7 @@ from qqsync.manifest import load
 
 from qqdepot import store
 from qqdepot.commands.build import TOOLCHAINS, repo_root
-from qqdepot.pin import MANIFEST
+from qqdepot.pin import MANIFEST, git_env
 
 DEPS = Path(".qq/deps")
 RECORD = Path(".qq/sync.json")
@@ -133,7 +133,7 @@ def run_fetch(args: argparse.Namespace) -> int:
         print(f"qq: {directory} already exists; run qq sync inside it instead", file=sys.stderr)
         return 1
     try:
-        subprocess.run(["git", "clone", "--quiet", args.url, str(directory)], check=True)
+        subprocess.run(["git", "clone", "--quiet", "--", args.url, str(directory)], check=True, env=git_env())
     except (OSError, subprocess.CalledProcessError) as e:
         print(f"qq: cannot clone {args.url}: {e}", file=sys.stderr)
         return 1

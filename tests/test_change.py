@@ -5,6 +5,7 @@ running, and later receives the verdict through --notify without any call of its
 """
 import fcntl
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -102,7 +103,8 @@ def notify_cmd(tmp_path):
     script = tmp_path / "notify.py"
     script.write_text("import json, os, sys\n"
                       "d = json.load(sys.stdin); d['env_verdict'] = os.environ['QQ_VERDICT']\n"
-                      f"open({str(out)!r}, 'w').write(json.dumps(d))\n")
+                      f"open({str(out)!r} + '.tmp', 'w').write(json.dumps(d))\n"
+                      f"os.replace({str(out)!r} + '.tmp', {str(out)!r})\n")   # wait_for never reads half a file
     return f"{sys.executable} {script}", out
 
 
@@ -128,6 +130,17 @@ def test_try_returns_a_run_id_at_once_and_the_verdict_is_pushed_later(world):
     assert wait_for(Path(receipt["verdict_file"]))["result"] == "pass"
     # The gate read check results with the backend's credential, not one qq stores.
     assert Path(f"{world.state}.gate-token").read_text() == "fake-token"
+
+
+def test_the_verdict_is_pushed_even_if_the_verdicts_directory_goes(world):
+    cmd, pushed = notify_cmd(world.tmp)
+    sha = world.head()
+    world.set_checks(sha, {"demo-presubmit": "in_progress"})
+    receipt = json.loads(qq("try", "--json", "--notify", cmd, "--interval", "0.2", "--deadline", "60").stdout)
+    shutil.rmtree(Path(receipt["verdict_file"]).parent)
+    world.set_checks(sha, {"demo-presubmit": "success"})
+    assert wait_for(pushed)["result"] == "pass"
+    assert wait_for(Path(receipt["verdict_file"]))["result"] == "pass"
 
 
 def test_a_red_check_is_pushed_as_refused(world):

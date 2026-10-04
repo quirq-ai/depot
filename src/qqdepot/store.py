@@ -8,19 +8,26 @@ A pin (quirq-repo/1) is a source and a digest. The source's scheme picks the fet
     any git URL + git:<commit>     a source tree at that commit
 
 Each pin is fetched once per machine into $QQ_HOME/store/<algo>-<hex>, unpacked when it is a
-tarball, and never changed after.
+tarball, and never changed after: the entry is made read only, its tree (paths, kinds, sizes,
+times, link targets) is recorded in TREE_RECORD inside it, and every reuse checks the tree
+again, so a toolchain something wrote into (a build, a package manager) is refused instead of
+shared. Remove a refused entry with
+`chmod -R u+w ENTRY && rm -rf ENTRY`; the next qq sync fetches it again.
 
 Pins are resolved, fetched (https, file, oci) and verified (every scheme, git checkouts included)
 by qqsync.pins, so depot only adds the git checkout and unpacking.
-TODO(expert): make store entries read only, so nothing installed into a synced toolchain
-changes the copy other repos share. A half-fetched entry is never visible: it is built in a
-scratch directory and renamed into place.
+A half-fetched entry is never visible: it is built in a scratch directory and renamed into place.
+TODO(expert): the record sits beside the tree it describes, so it catches accidents and stray
+writes, not someone who rewrites both with the user's own rights.
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import posixpath
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -30,7 +37,7 @@ from pathlib import Path
 
 from qqsync import pins
 
-from qqdepot.pin import qq_home
+from qqdepot.pin import git_env, qq_home
 
 
 class FetchError(Exception):
@@ -70,23 +77,119 @@ def ensure(artifact: Artifact) -> Path:
     """The store entry for `artifact`, fetching it first if this machine does not have it."""
     store = store_dir()
     entry = store / f"{artifact.algo}-{artifact.value}"
-    if entry.is_dir():
+    if _usable(entry):   # the common case, without the lock
         return entry
     store.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=store, prefix=f".{artifact.algo}-{artifact.value[:16]}.") as scratch:
-        scratch = Path(scratch)
-        staged = scratch / "entry"
-        if artifact.algo == "git":
-            _fetch_git(artifact, staged)
-        else:
-            blob = _fetch_blob(artifact, scratch / "blob")
-            _unpack(blob, staged, artifact)
-        try:
-            staged.rename(entry)
-        except OSError:
-            if not entry.is_dir():  # another qq finished the same entry first: theirs is identical
-                raise
+    # One qq at a time fetches, replaces or removes an entry; the others wait and reuse it.
+    with (store / f".{entry.name[:40]}.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if _usable(entry):
+            return entry
+        if entry.is_dir() and not entry.is_symlink():
+            # Made by a qq from before entries were recorded: nothing to check it against.
+            _remove(entry, store)
+        elif entry.is_symlink() or entry.exists():
+            raise FetchError(f"{entry} is not a store entry qq made; remove it and run qq sync again")
+        with tempfile.TemporaryDirectory(dir=store, prefix=f".{artifact.algo}-{artifact.value[:16]}.") as scratch:
+            scratch = Path(scratch)
+            staged = scratch / "entry"
+            if artifact.algo == "git":
+                _fetch_git(artifact, staged)
+            else:
+                blob = _fetch_blob(artifact, scratch / "blob")
+                _unpack(blob, staged, artifact)
+            try:
+                _seal(staged, artifact)
+                staged.rename(entry)
+            except OSError as e:
+                raise FetchError(f"{artifact.name}: cannot store {entry}: {e}") from None
     return entry
+
+
+TREE_RECORD = ".qq-tree"
+
+
+def _tree(root: Path) -> str:
+    """One sha256 over every path in `root`: its kind, executable bit, size, modification time and
+    link target. Cheap enough for every reuse, and anything that writes a file changes it.
+    Write bits are left out (qq clears them itself), and so is `__pycache__`, which Python
+    writes into its own install when it runs as root, where write bits stop nothing.
+    TODO(expert): this sees writes, not someone who resets the times with the user's rights."""
+    h = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for name in sorted(dirnames + filenames):
+            path = Path(dirpath, name)
+            rel = path.relative_to(root).as_posix()
+            if rel == TREE_RECORD:
+                continue
+            st = path.lstat()
+            if stat.S_ISLNK(st.st_mode):
+                kind, body = "l", os.readlink(path)
+            elif stat.S_ISDIR(st.st_mode):
+                kind, body = "d", ""
+            elif stat.S_ISREG(st.st_mode):
+                kind, body = "x" if st.st_mode & 0o111 else "f", f"{st.st_size}:{st.st_mtime_ns}"
+            else:
+                kind, body = "?", ""
+            h.update(f"{kind} {len(rel)}:{rel} {len(body)}:{body}\n".encode(errors="surrogateescape"))
+    return h.hexdigest()
+
+
+def _seal(staged: Path, artifact: Artifact) -> None:
+    """Make every file and directory read only (links have no mode), then record the tree."""
+    record = staged / TREE_RECORD
+    if record.exists() or record.is_symlink():
+        raise FetchError(f"{artifact.name}: the artifact has its own {TREE_RECORD}, which qq reserves")
+    record.write_text("")
+    for dirpath, dirnames, filenames in os.walk(staged, topdown=False):
+        for name in filenames:
+            path = Path(dirpath, name)
+            if not path.is_symlink() and name != TREE_RECORD:
+                path.chmod(path.stat().st_mode & ~0o222)
+    record.write_text(_tree(staged) + "\n")
+    record.chmod(0o444)
+    for dirpath, dirnames, filenames in os.walk(staged, topdown=False):
+        for name in dirnames:
+            path = Path(dirpath, name)
+            if not path.is_symlink():
+                path.chmod(path.stat().st_mode & ~0o222)
+    staged.chmod(staged.stat().st_mode & ~0o222)
+
+
+def _usable(entry: Path) -> bool:
+    """True for an entry that still matches its record, False for none or one with no record (an
+    older qq made it). A changed entry is an error, never silently used."""
+    if entry.is_symlink() or not entry.is_dir():
+        return False
+    try:
+        want = (entry / TREE_RECORD).read_text().strip()
+        got = _tree(entry)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        raise FetchError(f"cannot check {entry}: {e}") from None
+    if got != want:
+        raise FetchError(f"{entry} changed after qq fetched it, so it is not shared any more; "
+                         f"remove it (chmod -R u+w {entry} && rm -rf {entry}) and run qq sync again")
+    return True
+
+
+def _remove(entry: Path, store: Path) -> None:
+    """Move an entry aside and delete it, write bits back first (a sealed tree is read only)."""
+    aside = Path(tempfile.mkdtemp(dir=store, prefix=f".old-{entry.name[:24]}."))
+    try:
+        entry.chmod(0o700)   # moving a directory to a new parent rewrites its ".."
+        entry.rename(aside / "entry")
+        for dirpath, dirnames, filenames in os.walk(aside):
+            for name in dirnames:
+                path = Path(dirpath, name)
+                if not path.is_symlink():
+                    path.chmod(0o700)
+    except OSError as e:
+        raise FetchError(f"cannot replace {entry}, made by an older qq: {e}; remove it and run qq sync again") from None
+    finally:
+        shutil.rmtree(aside, ignore_errors=True)
 
 
 def _fetch_blob(artifact: Artifact, path: Path) -> Path:
@@ -188,7 +291,7 @@ def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:
 def _fetch_git(artifact: Artifact, into: Path) -> None:
     if artifact.source.startswith("-"):
         raise FetchError(f"{artifact.name}: {artifact.source!r} is not a repository URL")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # GIT_DIR would override -C
+    env = git_env()
 
     def git(*args: str) -> None:
         try:
