@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -60,10 +61,65 @@ def test_requirement_by_version(monkeypatch, tmp_path):
     assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+file:///mirror/depot@v1.0"
 
 
-def test_requirement_by_commit(tmp_path):
-    sha = "c" * 40
-    got = pin.requirement(pin.Pin("1.0", "https://example.invalid/depot", f"git:{sha}"), tmp_path)
-    assert got == f"git+https://example.invalid/depot@{sha}"
+def _repo(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    repo = tmp_path / "depot"
+    repo.mkdir()
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "merged")
+    merged = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "a fork's commit")
+    fork = git("rev-parse", "HEAD")
+    git("update-ref", "refs/pull/1/head", fork)   # served by id, on no branch or tag
+    git("reset", "-q", "--hard", merged)
+    return repo, merged, fork
+
+
+def test_a_commit_pin_must_be_on_a_branch_or_tag(tmp_path):
+    repo, merged, fork = _repo(tmp_path)
+    assert pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{merged}"), tmp_path) == f"git+{repo.as_uri()}@{merged}"
+    with pytest.raises(pin.PinError, match="on no branch or tag"):
+        pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{fork}"), tmp_path)
+    assert not pin.is_self(pin.Pin(__version__, repo.as_uri(), f"git:{merged}"))
+
+
+def test_an_empty_depot_url_means_the_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("QQ_DEPOT_URL", "")
+    assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+https://github.com/quirq-ai/depot@v1.0"
+
+
+@pytest.mark.parametrize("source, ok", [
+    ("https://github.com/quirq-ai/depot", True),
+    ("https://github.com/quirq-ai/depot.git", True),
+    ("https://github.com/quirq-ai/depot/releases/download/v1/qq.tar.gz", True),
+    ("https://github.com/quirq-ai/depot-evil", False),
+    ("https://github.com/someone/depot", False),
+    ("https://example.invalid/depot", False),
+    ("https://github.com/quirq-ai/depot/../../evil/depot", False),
+    ("https://github.com/quirq-ai/depot/%2e%2e/evil", False),
+    ("https://github.com/quirq-ai/depot@evil.invalid/x", False),
+    ("https://user@github.com/quirq-ai/depot", False),
+    ("https://github.com/quirq-ai/depot?x=/evil", False),
+    ("github.com/quirq-ai/depot", False),
+])
+def test_only_the_depot_is_trusted_by_default(monkeypatch, source, ok):
+    monkeypatch.delenv("QQ_DEPOT_URL", raising=False)
+    monkeypatch.delenv("QQ_TRUSTED_SOURCES", raising=False)
+    assert pin.trusted(source) is ok
+
+
+def test_an_untrusted_source_is_refused_before_anything_installs(monkeypatch, tmp_path):
+    monkeypatch.delenv("QQ_TRUSTED_SOURCES", raising=False)
+    monkeypatch.setattr(pin, "_run", lambda *a, **k: pytest.fail("must not install"))
+    evil = pin.Pin("1.0", "https://example.invalid/depot", "git:" + "a" * 40, Path("infra/repo.toml"))
+    with pytest.raises(pin.PinError, match="QQ_TRUSTED_SOURCES=https://example.invalid/depot"):
+        pin.ensure(evil)
+    monkeypatch.setenv("QQ_TRUSTED_SOURCES", "https://other.invalid https://example.invalid/depot")
+    pin.check(evil)
+    with pytest.raises(pin.PinError, match="needs a digest"):
+        pin.check(pin.Pin("1.0", "https://github.com/quirq-ai/depot", None))
 
 
 def test_archive_digest_checked(tmp_path):

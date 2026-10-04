@@ -46,13 +46,17 @@ that it reports the pinned version; later runs reuse it. When a roll moves the p
 installs the new version by itself: that is how `qq` updates. Outside a repo, or in one without a
 `[qq]` table, `qq` runs the version of your depot checkout.
 
-Trust: a pin runs code from where it points, as building the repo does. A `git:` or `sha256:`
-digest fixes the exact bytes; a version alone trusts the depot tag `v<version>`.
+Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/depot, and
+release archives under it) or from a source you list in `$QQ_TRUSTED_SOURCES`, so a pull request
+that edits the manifest cannot make `qq status` run code from a host it picked. A `source` needs a
+digest. A `git:` digest fixes the exact commit, and qq checks pip installed that commit; a
+`sha256:` digest fixes the archive; a version alone trusts the depot tag `v<version>`.
 
 | Variable | Meaning |
 |---|---|
 | `QQ_HOME` | Where launchers and pinned versions live |
 | `QQ_PYTHON` | The interpreter the bootstrap uses (default `python3`) |
+| `QQ_TRUSTED_SOURCES` | Space-separated sources a `[qq]` pin may install from, besides the depot |
 | `QQ_DEPOT_URL` | Where version tags are fetched from (default this repo; a mirror works) |
 | `QQ_PINNED=1` | Run this `qq` as is, without reading the pin (applies to that one process) |
 
