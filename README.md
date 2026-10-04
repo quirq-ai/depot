@@ -117,7 +117,7 @@ qq does not decide what must pass. It runs [gate](https://github.com/quirq-ai/ga
 at the commit `src/qqdepot/gate.py` pins, in its own environment under `$QQ_HOME/gate`, with
 infra-config at the commit the gate pins. A repo infra-config does not list (qqgate's exit 3) is
 reported as ungated and judged strictly from the backend's own checks: at least one check, every
-check a success (skipped and neutral are refusals), and no run of the commit still going. On GitHub the commands are thin wrappers over `gh`
+check a success (skipped and neutral are refusals), and no run of the commit still going; `qq land` then squash-merges unless `--method` says otherwise. On GitHub the commands are thin wrappers over `gh`
 (signed in with `gh auth login`); backend code sits in `src/qqdepot/backends/<backend>.py`,
 picked by `--backend` or `$QQ_BACKEND`.
 
@@ -146,3 +146,7 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the delivered workflows (xo-space #211, innernet #37) and the rulesets (V0-ORG-03) |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE).
