@@ -119,7 +119,8 @@ def _tree(root: Path, content: bool = False) -> str:
     enough for every reuse and changes with any ordinary write; the content form settles it
     when only times moved (a cache restore or copy that drops nanoseconds).
     Write bits are left out (qq clears them itself), and so are `__pycache__` directories,
-    which Python writes into its own install when it runs as root, where write bits stop nothing.
+    which the interpreter qq runs on writes into its own install when it runs as root, where write
+    bits stop nothing.
     TODO(expert): a same-size write with its time reset passes the stat form."""
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(root):
@@ -225,8 +226,9 @@ def _fetch_blob(artifact: Artifact, path: Path) -> Path:
 
 
 def _check_members(archive: tarfile.TarFile, artifact: Artifact) -> None:
-    """Containment that does not rest on the CPython build: the "data" filter had bypasses until
-    3.11.13, 3.12.11 and 3.13.4 (symlink chains), and qq runs on older system Pythons too.
+    """Containment that does not rest on the interpreter's own tarfile: its "data" filter had
+    bypasses until 3.11.13, 3.12.11 and 3.13.4 (symlink chains), and qq runs on older system
+    interpreters too.
 
     Every member is a plain relative path; no member sits under a symlink member, so a link
     cannot move where later members land; a link's target, resolved through the archive's other
