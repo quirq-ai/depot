@@ -1,0 +1,25 @@
+#!/bin/sh
+# qq bootstrap. Put this directory on PATH, like depot_tools.
+#
+# The first run makes a launcher environment from this depot checkout's commit,
+# under $QQ_HOME (default ${XDG_CACHE_HOME:-$HOME/.cache}/qq; see bootstrap.py).
+# The launcher reads the current repo's infra/repo.toml and runs the qq version it pins, installing that
+# version first if this machine does not have it yet.
+set -eu
+
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+depot=$(cd "$(dirname "$self")/.." && pwd -P)
+
+interpreter=${QQ_PYTHON:-python3}
+if ! "$interpreter" -c 'import sys, venv; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+  echo "qq: needs $interpreter 3.11 or newer with its venv module (set QQ_PYTHON to use another)." >&2
+  exit 1
+fi
+exec "$interpreter" "$depot/src/qqdepot/bootstrap.py" "$depot" "$@"
