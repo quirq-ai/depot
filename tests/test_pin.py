@@ -74,14 +74,24 @@ def _repo(tmp_path):
     fork = git("rev-parse", "HEAD")
     git("update-ref", "refs/pull/1/head", fork)   # served by id, on no branch or tag
     git("reset", "-q", "--hard", merged)
-    return repo, merged, fork
+    git("commit", "-q", "--allow-empty", "-m", "pushed by a writer")
+    pushed = git("rev-parse", "HEAD")
+    git("branch", "feature", pushed)              # a branch anyone with write access can move
+    git("reset", "-q", "--hard", merged)
+    git("commit", "-q", "--allow-empty", "-m", "released")
+    released = git("rev-parse", "HEAD")
+    git("tag", "v1.0", released)
+    git("reset", "-q", "--hard", merged)
+    return repo, merged, fork, pushed, released
 
 
-def test_a_commit_pin_must_be_on_a_branch_or_tag(tmp_path):
-    repo, merged, fork = _repo(tmp_path)
-    assert pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{merged}"), tmp_path) == f"git+{repo.as_uri()}@{merged}"
-    with pytest.raises(pin.PinError, match="on no branch or tag"):
-        pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{fork}"), tmp_path)
+def test_a_commit_pin_must_be_on_main_or_a_release_tag(tmp_path):
+    repo, merged, fork, pushed, released = _repo(tmp_path)
+    for ok in (merged, released):
+        assert pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{ok}"), tmp_path) == f"git+{repo.as_uri()}@{ok}"
+    for bad in (fork, pushed):
+        with pytest.raises(pin.PinError, match="neither main nor a v\\* tag"):
+            pin.requirement(pin.Pin("1.0", repo.as_uri(), f"git:{bad}"), tmp_path)
     assert not pin.is_self(pin.Pin(__version__, repo.as_uri(), f"git:{merged}"))
 
 

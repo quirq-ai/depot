@@ -32,7 +32,7 @@ def mirror(tmp_path_factory):
     shutil.rmtree(repo / "src" / "qqdepot.egg-info", ignore_errors=True)
     init = repo / "src" / "qqdepot" / "__init__.py"
     init.write_text(init.read_text().replace('__version__ = "', f'__version__ = "{PINNED}"  # was "'))
-    git(repo, "init", "-q")
+    git(repo, "init", "-q", "-b", "main")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "mirror")
     git(repo, "tag", f"v{PINNED}")
