@@ -26,3 +26,84 @@ jobs:
           python -m venv "$RUNNER_TEMP/guard"
           "$RUNNER_TEMP/guard/bin/pip" install --quiet "qqsync @ git+https://github.com/quirq-ai/sync@8f624f4a7fe3abdab2c7b83376f1ae7772073fd4"  # TODO(expert): let rollers move this pin.
           "$RUNNER_TEMP/guard/bin/qqsync" guard .
+
+  # V0-DEP-03 done-when on the real product repos: `qq test` (what a contributor runs) and
+  # `qqrecipes execute` (what CI runs) on separate runners, same commit, same JUnit results.
+  # The manifests are sync's onboarding fixtures until onboarding lands infra/repo.toml in each
+  # repo; toolchains come from setup actions at the toolchains pins until qq sync can pull them
+  # (public ghcr packages and promoted pins).
+  parity:
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [xo-space, innernet]
+        side: [local, ci]
+        include:
+          - repo: xo-space
+            ref: c3cea98c8e70479b1f0cb8f871e28f8f6ee5a4f6  # TODO(expert): let rollers move these pins.
+          - repo: innernet
+            ref: da9b84cf811f4358e3ee0b5d9d4388b69bf481e9
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: python
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v7
+        if: matrix.repo == 'innernet'
+        with:
+          node-version: "24.21.0"
+      - uses: pnpm/action-setup@v6
+        if: matrix.repo == 'innernet'
+        with:
+          version: "11.28.2"
+      - uses: actions/checkout@v7
+        with:
+          repository: quirq-ai/${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: .qq/product
+      - uses: actions/checkout@v7
+        with:
+          repository: quirq-ai/sync
+          ref: 5abac76af194a40961074ce75432f4fdb79fe951
+          path: .qq/sync
+      - name: give the product its onboarding manifest
+        run: |
+          mkdir -p .qq/product/infra
+          cp .qq/sync/tests/fixtures/${{ matrix.repo }}.repo.toml .qq/product/infra/repo.toml
+          echo "PYROOT=$(dirname "$(dirname "${{ steps.python.outputs.python-path }}")")" >> "$GITHUB_ENV"
+      - name: local, as a contributor runs it
+        if: matrix.side == 'local'
+        working-directory: .qq/product
+        env:
+          QQ_HOME: ${{ runner.temp }}/qq
+        run: "$GITHUB_WORKSPACE/bin/qq test --toolchain python=$PYROOT --out $GITHUB_WORKSPACE/.qq/out"
+      - name: CI, as presubmit runs it
+        if: matrix.side == 'ci'
+        run: |
+          python -m pip install --quiet .  # recipes at the commit depot pins, so both sides match
+          qqrecipes execute test --repo .qq/product --out .qq/out --toolchain python=$PYROOT
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: parity-${{ matrix.repo }}-${{ matrix.side }}
+          path: .qq/out/
+          if-no-files-found: error
+
+  parity-compare:
+    needs: parity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: results
+      - name: same JUnit results, local and CI
+        run: |
+          for repo in xo-space innernet; do
+            echo "== $repo"
+            python3 tools/junit_compare.py "results/parity-$repo-local" "results/parity-$repo-ci"
+          done

@@ -53,7 +53,7 @@ def sync(root: Path) -> list[dict]:
         # A pin dropped from the manifest must not linger and be built with.
         if (root / base).is_dir():
             for stale in (root / base).iterdir():
-                if stale.name not in pins and stale.is_symlink():
+                if stale.name not in pins and not stale.name.startswith(".") and stale.is_symlink():
                     stale.unlink()
     (root / RECORD).parent.mkdir(parents=True, exist_ok=True)
     (root / RECORD).write_text(json.dumps(synced, indent=2) + "\n")
