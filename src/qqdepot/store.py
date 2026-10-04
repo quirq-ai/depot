@@ -19,6 +19,7 @@ scratch directory and renamed into place.
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import subprocess
 import tarfile
@@ -100,10 +101,42 @@ def _fetch_blob(artifact: Artifact, path: Path) -> Path:
     return path
 
 
+def _check_members(archive: tarfile.TarFile, artifact: Artifact) -> None:
+    """Containment that does not rest on the CPython build: the "data" filter had bypasses until
+    3.11.13, 3.12.11 and 3.13.4 (symlink chains), and qq runs on older system Pythons too.
+
+    Every member is a plain relative path; no member sits under a symlink member, so a link
+    cannot move where later members land; a link's target, taken from the link's own directory,
+    stays inside the archive; and a hard link names a regular file of the archive.
+    """
+    def inside(path: str) -> bool:
+        norm = posixpath.normpath(path)
+        return not (norm == ".." or norm.startswith("../") or posixpath.isabs(norm))
+
+    links, files = set(), set()
+    for m in archive.getmembers():
+        if posixpath.isabs(m.name) or ".." in m.name.split("/") or not inside(m.name):
+            raise FetchError(f"{artifact.name}: archive member {m.name!r} leaves the archive")
+        name = posixpath.normpath(m.name)
+        parts = name.split("/")
+        if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
+            raise FetchError(f"{artifact.name}: archive member {m.name!r} sits under a symlink")
+        if m.issym():
+            if not inside(posixpath.join(posixpath.dirname(name), m.linkname)):
+                raise FetchError(f"{artifact.name}: symlink {m.name!r} points outside the archive")
+            links.add(name)
+        elif m.islnk():
+            if posixpath.normpath(m.linkname) not in files:
+                raise FetchError(f"{artifact.name}: hard link {m.name!r} does not name a file before it")
+        elif m.isfile():
+            files.add(name)
+
+
 def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:
     if tarfile.is_tarfile(blob):
         try:
             with tarfile.open(blob) as archive:
+                _check_members(archive, artifact)
                 # "data" refuses absolute paths, links that leave `into` and device files, and keeps
                 # executable bits and in-tree symlinks, which is all a toolchain needs.
                 archive.extractall(into, filter="data")
