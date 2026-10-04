@@ -119,10 +119,16 @@ def _check_members(archive: tarfile.TarFile, artifact: Artifact) -> None:
         if posixpath.isabs(m.name) or ".." in m.name.split("/") or not inside(m.name):
             raise FetchError(f"{artifact.name}: archive member {m.name!r} leaves the archive")
         name = posixpath.normpath(m.name)
+        if name in links or name in files:   # a later member would replace what was checked
+            raise FetchError(f"{artifact.name}: archive member {m.name!r} appears twice")
         parts = name.split("/")
         if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
             raise FetchError(f"{artifact.name}: archive member {m.name!r} sits under a symlink")
         if m.issym():
+            # Both readings must stay inside: the kernel's (resolved through the archive's links,
+            # below) and the text's, since some tarfile filters rewrite targets lexically.
+            if not inside(posixpath.join(posixpath.dirname(name), m.linkname)):
+                raise FetchError(f"{artifact.name}: symlink {m.name!r} points outside the archive")
             links[name] = m.linkname
         elif m.islnk():
             # tarfile links to the target path as written, so ".." through a symlink would count.

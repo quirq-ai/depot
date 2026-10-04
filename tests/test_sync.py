@@ -386,3 +386,16 @@ def test_sync_json_is_replaced_not_written_through_a_hard_link(tmp_path, monkeyp
     assert cli.main(["sync"]) == 0
     assert victim.read_text() == "keep\n"
     assert json.loads((repo / ".qq" / "sync.json").read_text()) == []
+
+
+def test_a_link_must_stay_inside_read_as_text_too(tmp_path):
+    """Some tarfile filters rewrite targets lexically: d -> x/y, c -> d/../.. becomes c -> .."""
+    archive = _tar(tmp_path, [("d", "sym", "x/y"), ("c", "sym", "d/../..")])
+    with pytest.raises(store.FetchError, match="points outside"):
+        store.ensure(store.Artifact.of("evil", archive.as_uri(), sha256(archive.read_bytes())))
+
+
+def test_a_member_named_twice_is_refused(tmp_path):
+    archive = _tar(tmp_path, [("a", "sym", "b"), ("a", "file", b"x")])
+    with pytest.raises(store.FetchError, match="appears twice"):
+        store.ensure(store.Artifact.of("twice", archive.as_uri(), sha256(archive.read_bytes())))

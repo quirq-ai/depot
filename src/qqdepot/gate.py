@@ -27,8 +27,15 @@ GATE_SOURCE = "https://github.com/quirq-ai/gate"
 GATE_COMMIT = "3b4250c05b6d629e048c2f760beb9ab4d3e2c251"   # main after #7: exit 3 for "not onboarded"
 # Override for development and tests: a qqgate executable and an infra-config checkout.
 GATE_ENV, CONFIG_ENV = "QQ_GATE", "QQ_GATE_CONFIG"
-# A hung gate must not hold `qq land` or the watcher open: past this it is an error, never a pass.
-GATE_TIMEOUT = float(os.environ.get("QQ_GATE_TIMEOUT", "300"))
+
+
+def _timeout() -> float:
+    """A hung gate must not hold `qq land` or the watcher open: past this it is an error, never a pass."""
+    try:
+        return float(os.environ.get("QQ_GATE_TIMEOUT") or 300)
+    except ValueError:
+        raise ChangeError(f"QQ_GATE_TIMEOUT={os.environ['QQ_GATE_TIMEOUT']!r} is not a number of seconds") from None
+
 
 # Check states that are not a result yet. Any other state that is not a pass is a refusal.
 RUNNING = frozenset({"queued", "in_progress", "waiting", "requested", "pending", "expected"})
@@ -106,9 +113,9 @@ def _qqgate(args: list[str], token: str | None = None) -> tuple[int, dict | None
         env["QQ_GITHUB_TOKEN"] = token
     try:
         p = subprocess.run([str(exe), args[0], "--config", str(config), *args[1:], "--json"],
-                           capture_output=True, text=True, env=env, timeout=GATE_TIMEOUT)
+                           capture_output=True, text=True, env=env, timeout=_timeout())
     except subprocess.TimeoutExpired:
-        raise ChangeError(f"the gate did not answer within {GATE_TIMEOUT:g}s ({exe} {args[0]})") from None
+        raise ChangeError(f"the gate did not answer within {_timeout():g}s ({exe} {args[0]})") from None
     except OSError as e:
         raise ChangeError(f"cannot run the gate ({exe}): {e}") from None
     data = None

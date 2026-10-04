@@ -299,6 +299,13 @@ def test_a_gate_that_misbehaves_is_an_error_and_lands_nothing(world, monkeypatch
     assert world.read()["merges"] == []
 
 
+def test_a_bad_gate_timeout_is_an_error(world, monkeypatch):
+    qq("upload")
+    monkeypatch.setenv("QQ_GATE_TIMEOUT", "soon")
+    p = qq("status", check=False)
+    assert p.returncode == 2 and "not a number of seconds" in p.stderr
+
+
 def test_the_gate_sees_the_canonical_repo_name(world):
     qq("upload")
     world.set_checks(world.head(), {"lint": "success"})   # the required demo-presubmit never ran
