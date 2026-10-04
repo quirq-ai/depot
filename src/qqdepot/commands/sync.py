@@ -9,8 +9,10 @@ each a link into the shared store (see store.py), so `qq build` and `qq test` fi
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,9 +29,42 @@ RECORD = Path(".qq/sync.json")
 SECTIONS = (("toolchains", TOOLCHAINS), ("deps", DEPS))
 
 
+def _real_dir(root: Path, rel: Path) -> Path:
+    """<root>/<rel> as a real directory inside the repo, made if missing.
+
+    A repo can commit `.qq` or `.qq/deps` as a symlink. Followed, it would make qq sync write links,
+    delete links and write sync.json wherever it points, so any symlink on the way is refused.
+    TODO(expert): open each level with O_NOFOLLOW (dir fds) to close the check-then-use race.
+    """
+    path = root
+    for part in rel.parts:
+        path = path / part
+        if path.is_symlink():
+            raise store.FetchError(f"{path} is a symlink; qq sync writes only inside the repo. "
+                                   "Remove it (and any committed .qq) and run qq sync again")
+        if not path.exists():
+            path.mkdir()
+        elif not path.is_dir():
+            raise store.FetchError(f"{path} is not a directory; move it away and run qq sync again")
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise store.FetchError(f"{path} resolves outside {root}; refusing to write there")
+    return path
+
+
+STORE_ENTRY = re.compile(r"[a-z0-9]+-[0-9a-f]{16,}")   # store.py's <algo>-<hex> entry names
+
+
+def _ours(link: Path) -> bool:
+    """True for a link qq sync made: one into a store entry, under any QQ_HOME (it may change)."""
+    if not link.is_symlink():
+        return False
+    target = Path(os.readlink(link))
+    return target.parent.name == "store" and STORE_ENTRY.fullmatch(target.name) is not None
+
+
 def _link(target: Path, link: Path) -> None:
-    """Point `link` at `target`, replacing what was there in one step."""
-    link.parent.mkdir(parents=True, exist_ok=True)
+    """Point `link` at `target`, replacing what was there in one step. `link.parent` must be a
+    directory _real_dir returned."""
     if link.exists() and not link.is_symlink():
         raise store.FetchError(f"{link} is not a link qq made; move it away and run qq sync again")
     tmp = link.with_name(f".{link.name}.{os.getpid()}.tmp")
@@ -47,16 +82,24 @@ def sync(root: Path) -> list[dict]:
         for name in pins:
             artifact = store.resolve(manifest, section, name)
             entry = store.ensure(artifact)
-            _link(entry, root / base / name)
+            _link(entry, _real_dir(root, base) / name)
             synced.append({"section": section, "name": name, "digest": artifact.digest, "path": str(entry)})
             print(f"{base / name}: {artifact.digest[:19]}…")
         # A pin dropped from the manifest must not linger and be built with.
-        if (root / base).is_dir():
-            for stale in (root / base).iterdir():
-                if stale.name not in pins and not stale.name.startswith(".") and stale.is_symlink():
+        # Only links qq made (into the store) are removed, so nothing else is ever deleted.
+        if (root / base).exists() or (root / base).is_symlink():
+            for stale in _real_dir(root, base).iterdir():
+                if stale.name not in pins and not stale.name.startswith(".") and _ours(stale):
                     stale.unlink()
-    (root / RECORD).parent.mkdir(parents=True, exist_ok=True)
-    (root / RECORD).write_text(json.dumps(synced, indent=2) + "\n")
+    record = _real_dir(root, RECORD.parent) / RECORD.name
+    try:
+        fd = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise store.FetchError(f"{record} is a symlink; remove it and run qq sync again") from None
+        raise
+    with os.fdopen(fd, "w") as out:
+        out.write(json.dumps(synced, indent=2) + "\n")
     return synced
 
 

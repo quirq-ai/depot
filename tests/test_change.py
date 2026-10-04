@@ -243,17 +243,45 @@ def test_status_exit_codes(world):
     assert qq("status", "1", check=False).returncode == 1
 
 
-@pytest.mark.parametrize("signal", ["message", "exit3"])
-def test_status_of_an_ungated_repo_reports_the_backend_checks(world, monkeypatch, signal):
+def test_status_of_an_ungated_repo_is_strict(world, monkeypatch):
     monkeypatch.setenv("FAKE_GATE_REPOS", "other")
-    monkeypatch.setenv("FAKE_GATE_UNGATED", signal)   # the pinned gate's message, or gate 5ba0d58's exit 3
     qq("upload")
-    world.set_checks(world.head(), {"lint": "success", "unit": "skipped"})
+    sha = world.head()
+    world.set_checks(sha, {"lint": "success", "unit": "success"})
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed"}))
     p = qq("status", "--json", check=False)
     data = json.loads(p.stdout)
     assert p.returncode == 0 and data["result"] == "pass" and data["verdict"]["gated"] is False
-    world.set_checks(world.head(), {})
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed", "2": "in_progress"}))
+    assert qq("status", check=False).returncode == 3   # a run still going may add a red check
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed"}))
+    world.set_checks(sha, {"lint": "success", "unit": "skipped"})
+    assert qq("status", check=False).returncode == 1   # skipped verified nothing
+    world.set_checks(sha, {})
     assert qq("status", check=False).returncode == 3   # no checks yet is not a pass
+    world.set_checks(sha, {"lint": "success"})
+    world.update(lambda s: s.setdefault("statuses", {}).__setitem__(sha, {"ci/other": "failure"}))
+    assert qq("status", check=False).returncode == 1   # another CI's commit status counts too
+    world.update(lambda s: s["statuses"].__setitem__(sha, {}))
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed:action_required"}))
+    assert qq("status", check=False).returncode == 1   # a run that never ran its jobs verified nothing
+
+
+def test_a_gate_error_naming_the_ungated_case_is_not_ungated(world, monkeypatch):
+    qq("upload")
+    world.set_checks(world.head(), {"lint": "success"})
+    monkeypatch.setenv("FAKE_GATE_CRASH", "1")
+    p = qq("land", "--method", "merge", check=False)
+    assert p.returncode == 2 and "could not decide" in p.stderr
+    assert world.read()["merges"] == []
+
+
+def test_the_gate_sees_the_canonical_repo_name(world):
+    qq("upload")
+    world.set_checks(world.head(), {"lint": "success"})   # the required demo-presubmit never ran
+    p = qq("land", "--repo", "Quirq-AI/Demo", "--json", check=False)
+    assert p.returncode == 0 and json.loads(p.stdout)["change"]["repo"] == REPO
+    assert world.read()["merges"] == []                  # gated, so nothing queued yet
 
 
 def test_refuses_to_upload_from_the_base_branch_or_a_detached_head(world):
