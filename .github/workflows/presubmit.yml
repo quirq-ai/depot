@@ -90,11 +90,19 @@ jobs:
           path: .qq/out/
           if-no-files-found: error
 
+  # A required check. It always runs, so a red or cancelled parity leg fails it instead of
+  # skipping it: GitHub counts a skipped required check as passing.
   parity-compare:
     needs: parity
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: every parity leg passed
+        if: needs.parity.result != 'success'
+        run: |
+          echo "::error::parity finished ${{ needs.parity.result }}, so local and CI results were not compared"
+          exit 1
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
