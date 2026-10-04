@@ -8,6 +8,7 @@ test needs no network.
 import hashlib
 import io
 import json
+import os
 import subprocess
 import tarfile
 import textwrap
@@ -360,3 +361,28 @@ def test_toolchain_style_relative_links_still_unpack(tmp_path):
                               ("./bin", "dir", None), ("./bin/npm", "sym", "../lib/npm-cli.js")])
     entry = store.ensure(store.Artifact.of("node", archive.as_uri(), sha256(archive.read_bytes())))
     assert (entry / "bin" / "npm").read_text() == "npm\n"
+
+
+def test_a_link_target_is_resolved_through_the_archive_links_not_read_as_text(tmp_path):
+    """b -> . then a -> b/b/b/../../.. reads as "." but climbs three levels on the filesystem."""
+    archive = _tar(tmp_path, [("b", "sym", "."), ("a", "sym", "b/b/b/../../..")])
+    with pytest.raises(store.FetchError, match="points outside"):
+        store.ensure(store.Artifact.of("evil", archive.as_uri(), sha256(archive.read_bytes())))
+
+
+def test_a_link_loop_is_refused(tmp_path):
+    archive = _tar(tmp_path, [("x", "sym", "y"), ("y", "sym", "x")])
+    with pytest.raises(store.FetchError, match="points outside"):
+        store.ensure(store.Artifact.of("loop", archive.as_uri(), sha256(archive.read_bytes())))
+
+
+def test_sync_json_is_replaced_not_written_through_a_hard_link(tmp_path, monkeypatch):
+    repo = product(tmp_path, "")
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    (repo / ".qq").mkdir()
+    os.link(victim, repo / ".qq" / "sync.json")
+    monkeypatch.chdir(repo)
+    assert cli.main(["sync"]) == 0
+    assert victim.read_text() == "keep\n"
+    assert json.loads((repo / ".qq" / "sync.json").read_text()) == []

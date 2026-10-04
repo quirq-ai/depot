@@ -106,14 +106,15 @@ def _check_members(archive: tarfile.TarFile, artifact: Artifact) -> None:
     3.11.13, 3.12.11 and 3.13.4 (symlink chains), and qq runs on older system Pythons too.
 
     Every member is a plain relative path; no member sits under a symlink member, so a link
-    cannot move where later members land; a link's target, taken from the link's own directory,
-    stays inside the archive; and a hard link names a regular file of the archive.
+    cannot move where later members land; a link's target, resolved through the archive's other
+    links the way the filesystem will, stays inside the archive; and a hard link names, as
+    written, a regular file of the archive.
     """
     def inside(path: str) -> bool:
         norm = posixpath.normpath(path)
         return not (norm == ".." or norm.startswith("../") or posixpath.isabs(norm))
 
-    links, files = set(), set()
+    links, files = {}, set()
     for m in archive.getmembers():
         if posixpath.isabs(m.name) or ".." in m.name.split("/") or not inside(m.name):
             raise FetchError(f"{artifact.name}: archive member {m.name!r} leaves the archive")
@@ -122,14 +123,44 @@ def _check_members(archive: tarfile.TarFile, artifact: Artifact) -> None:
         if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
             raise FetchError(f"{artifact.name}: archive member {m.name!r} sits under a symlink")
         if m.issym():
-            if not inside(posixpath.join(posixpath.dirname(name), m.linkname)):
-                raise FetchError(f"{artifact.name}: symlink {m.name!r} points outside the archive")
-            links.add(name)
+            links[name] = m.linkname
         elif m.islnk():
-            if posixpath.normpath(m.linkname) not in files:
+            # tarfile links to the target path as written, so ".." through a symlink would count.
+            if ".." in m.linkname.split("/") or posixpath.normpath(m.linkname) not in files:
                 raise FetchError(f"{artifact.name}: hard link {m.name!r} does not name a file before it")
         elif m.isfile():
             files.add(name)
+    for name in links:
+        if _escapes(name, links):
+            raise FetchError(f"{artifact.name}: symlink {name!r} points outside the archive")
+
+
+def _escapes(name: str, links: dict[str, str]) -> bool:
+    """Whether the symlink `name` resolves outside the archive root. Resolves like the kernel,
+    one component at a time, following the archive's links as it meets them, so a ".." after
+    a link to "." climbs from where that link really points, not from its text."""
+    at = posixpath.dirname(name).split("/") if posixpath.dirname(name) else []
+    todo, hops = links[name].split("/"), 0
+    if posixpath.isabs(links[name]):
+        return True
+    while todo:
+        part = todo.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not at:
+                return True
+            at.pop()
+            continue
+        at.append(part)
+        target = links.get("/".join(at))
+        if target is not None:
+            hops += 1
+            if hops > 40 or posixpath.isabs(target):   # a loop, or a link out by an absolute path
+                return True
+            at.pop()
+            todo = target.split("/") + todo
+    return False
 
 
 def _unpack(blob: Path, into: Path, artifact: Artifact) -> None:

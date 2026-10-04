@@ -9,12 +9,12 @@ each a link into the shared store (see store.py), so `qq build` and `qq test` fi
 from __future__ import annotations
 
 import argparse
-import errno
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from qqsync.errors import ManifestError
@@ -92,15 +92,26 @@ def sync(root: Path) -> list[dict]:
                 if stale.name not in pins and not stale.name.startswith(".") and _ours(stale):
                     stale.unlink()
     record = _real_dir(root, RECORD.parent) / RECORD.name
+    if record.is_symlink():
+        raise store.FetchError(f"{record} is a symlink; remove it and run qq sync again")
+    # A new file renamed over the record: writing in place would go through a hard link
+    # (a tarball or a local tool can make one) to a file outside the repo.
+    fd, tmp = tempfile.mkstemp(dir=record.parent, prefix=f".{RECORD.name}.")
     try:
-        fd = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            raise store.FetchError(f"{record} is a symlink; remove it and run qq sync again") from None
+        with os.fdopen(fd, "w") as out:
+            out.write(json.dumps(synced, indent=2) + "\n")
+        os.chmod(tmp, 0o666 & ~_umask())
+        os.replace(tmp, record)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
         raise
-    with os.fdopen(fd, "w") as out:
-        out.write(json.dumps(synced, indent=2) + "\n")
     return synced
+
+
+def _umask() -> int:
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
 
 
 def run_sync(args: argparse.Namespace) -> int:

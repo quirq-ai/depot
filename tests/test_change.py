@@ -286,6 +286,19 @@ def test_a_gate_error_naming_the_ungated_case_is_not_ungated(world, monkeypatch)
     assert world.read()["merges"] == []
 
 
+@pytest.mark.parametrize("odd, says", [("hang", "did not answer within"),
+                                        ("list", "not an object"),
+                                        ("pass-but-1", "inconsistent verdict")])
+def test_a_gate_that_misbehaves_is_an_error_and_lands_nothing(world, monkeypatch, odd, says):
+    qq("upload")
+    world.set_checks(world.head(), {"demo-presubmit": "success"})
+    monkeypatch.setenv("FAKE_GATE_ODD", odd)
+    monkeypatch.setenv("QQ_GATE_TIMEOUT", "2")
+    p = qq("land", check=False)
+    assert p.returncode == 2 and says in p.stderr and "Traceback" not in p.stderr
+    assert world.read()["merges"] == []
+
+
 def test_the_gate_sees_the_canonical_repo_name(world):
     qq("upload")
     world.set_checks(world.head(), {"lint": "success"})   # the required demo-presubmit never ran
