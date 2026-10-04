@@ -82,6 +82,10 @@ def test_pin_by_commit(tmp_path, mirror):
     sha = git(mirror, "rev-parse", "HEAD")
     repo = consumer(tmp_path, f'[qq]\nversion = "{PINNED}"\nsource = "{mirror.as_uri()}"\ndigest = "git:{sha}"\n')
     run = qq(repo, env, "--version")
+    assert run.returncode != 0 and "does not trust" in run.stderr   # nothing installed from it
+    assert not (tmp_path / "home" / ".cache" / "qq" / "versions").exists()
+    env["QQ_TRUSTED_SOURCES"] = mirror.as_uri()
+    run = qq(repo, env, "--version")
     assert run.returncode == 0, run.stderr
     assert run.stdout.strip() == f"qq {PINNED}"
 

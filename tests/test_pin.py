@@ -60,6 +60,39 @@ def test_requirement_by_version(monkeypatch, tmp_path):
     assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+file:///mirror/depot@v1.0"
 
 
+def test_requirement_by_commit_from_the_depot(monkeypatch, tmp_path):
+    monkeypatch.delenv("QQ_DEPOT_URL", raising=False)
+    sha = "c" * 40
+    assert pin.requirement(pin.Pin("1.0", None, f"git:{sha}"), tmp_path) == f"git+https://github.com/quirq-ai/depot@{sha}"
+    assert not pin.is_self(pin.Pin(__version__, None, f"git:{sha}"))   # a commit pin is never "any 0.1.0"
+
+
+@pytest.mark.parametrize("source, ok", [
+    ("https://github.com/quirq-ai/depot", True),
+    ("https://github.com/quirq-ai/depot.git", True),
+    ("https://github.com/quirq-ai/depot/releases/download/v1/qq.tar.gz", True),
+    ("https://github.com/quirq-ai/depot-evil", False),
+    ("https://github.com/someone/depot", False),
+    ("https://example.invalid/depot", False),
+])
+def test_only_the_depot_is_trusted_by_default(monkeypatch, source, ok):
+    monkeypatch.delenv("QQ_DEPOT_URL", raising=False)
+    monkeypatch.delenv("QQ_TRUSTED_SOURCES", raising=False)
+    assert pin.trusted(source) is ok
+
+
+def test_an_untrusted_source_is_refused_before_anything_installs(monkeypatch, tmp_path):
+    monkeypatch.delenv("QQ_TRUSTED_SOURCES", raising=False)
+    monkeypatch.setattr(pin, "_run", lambda *a, **k: pytest.fail("must not install"))
+    evil = pin.Pin("1.0", "https://example.invalid/depot", "git:" + "a" * 40, Path("infra/repo.toml"))
+    with pytest.raises(pin.PinError, match="QQ_TRUSTED_SOURCES=https://example.invalid/depot"):
+        pin.ensure(evil)
+    monkeypatch.setenv("QQ_TRUSTED_SOURCES", "https://other.invalid https://example.invalid/depot")
+    pin.check(evil)
+    with pytest.raises(pin.PinError, match="needs a digest"):
+        pin.check(pin.Pin("1.0", "https://github.com/quirq-ai/depot", None))
+
+
 def test_requirement_by_commit(tmp_path):
     sha = "c" * 40
     got = pin.requirement(pin.Pin("1.0", "https://example.invalid/depot", f"git:{sha}"), tmp_path)

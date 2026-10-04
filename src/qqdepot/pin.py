@@ -8,13 +8,21 @@ The pin is the manifest's `[qq]` table (schema quirq-repo/1, read only through q
     digest = "git:<commit>"            # or sha256:<archive digest>
 
 Each pinned version gets its own environment under $QQ_HOME/versions, made once and
-reused. Before first use the installed qq must report the pinned version, so a
-tag or archive that holds a different version is an error, not a silent mismatch.
+reused. Before first use the installed qq must report the pinned version (and, for a
+git: digest, have been installed from that commit), so a tag or archive that holds
+something else is an error, not a silent mismatch.
+
+A pin installs only from the depot ($QQ_DEPOT_URL, default quirq-ai/depot) or from a
+source the user lists in $QQ_TRUSTED_SOURCES: a pull request that edits the manifest
+cannot make `qq status` run code from a host of its choosing.
+TODO(suraj): protect v* tags in quirq-ai/depot (a version-only pin trusts the tag), and
+bump __version__ with each release so a version names one commit.
 """
 from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -101,9 +109,38 @@ def read_pin(start: Path) -> Pin | None:
     return Pin(table["version"], table.get("source"), table.get("digest"), manifest)
 
 
+TRUSTED_ENV = "QQ_TRUSTED_SOURCES"
+
+
+def _base(url: str) -> str:
+    return url.rstrip("/").removesuffix(".git")
+
+
+def trusted(source: str) -> bool:
+    """Whether a pin may install qq from `source`: the depot qq uses ($QQ_DEPOT_URL, default
+    quirq-ai/depot) or what the user trusts in $QQ_TRUSTED_SOURCES (space separated), and
+    anything under those (release archives). A repo's manifest alone never picks a new host."""
+    bases = [DEFAULT_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""), *os.environ.get(TRUSTED_ENV, "").split()]
+    src = _base(source)
+    return any(b and (src == _base(b) or src.startswith(_base(b) + "/")) for b in bases)
+
+
+def check(pin: Pin) -> None:
+    """Refuse a pin that would install from an untrusted place or without fixed bytes."""
+    if pin.source is None:
+        if pin.digest and not pin.digest.startswith("git:"):
+            raise PinError(f"{pin.manifest}: a sha256 digest needs the source archive it names")
+        return
+    if not pin.digest:
+        raise PinError(f"{pin.manifest}: [qq] source needs a digest (git:<commit> or sha256:<archive>)")
+    if not trusted(pin.source):
+        raise PinError(f"{pin.manifest} pins qq from {pin.source}, which qq does not trust. Running it would "
+                       f"run whatever that repo's author chose. To trust it, set {TRUSTED_ENV}={pin.source}")
+
+
 def is_self(pin: Pin) -> bool:
     """True when this process already is the pinned qq."""
-    return pin.source is None and pin.version == __version__
+    return pin.source is None and pin.digest is None and pin.version == __version__
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -131,13 +168,23 @@ def _fetch_archive(pin: Pin, into: Path) -> Path:
 
 def requirement(pin: Pin, scratch: Path) -> str:
     """What pip installs for this pin."""
+    algo, _, value = (pin.digest or "").partition(":")
     if pin.source is None:
         base = os.environ.get("QQ_DEPOT_URL", DEFAULT_DEPOT_URL)
-        return f"git+{base}@v{pin.version}"
-    algo, _, value = pin.digest.partition(":")
+        return f"git+{base}@{value if algo == 'git' else 'v' + pin.version}"
     if algo == "git":
         return f"git+{pin.source}@{value}"
     return str(_fetch_archive(pin, scratch))
+
+
+def installed_commit(target: Path) -> str | None:
+    """The commit pip installed qqdepot from, from its PEP 610 direct_url.json, if a git one."""
+    for record in target.glob("lib/python*/site-packages/qqdepot-*.dist-info/direct_url.json"):
+        try:
+            return json.loads(record.read_text()).get("vcs_info", {}).get("commit_id")
+        except (OSError, ValueError, AttributeError):
+            return None
+    return None
 
 
 def installed_version(qq: Path) -> str:
@@ -149,6 +196,7 @@ def installed_version(qq: Path) -> str:
 
 def ensure(pin: Pin) -> Path:
     """The qq executable for `pin`, installing it into $QQ_HOME/versions first if needed."""
+    check(pin)
     versions = qq_home() / "versions"
     target = versions / pin.key
     qq = target / "bin" / "qq"
@@ -172,6 +220,9 @@ def ensure(pin: Pin) -> Path:
             got = installed_version(qq)
             if got != pin.version:
                 raise PinError(f"{pin.manifest} pins qq {pin.version}, but what it names installs qq {got}")
+            algo, _, value = (pin.digest or "").partition(":")
+            if algo == "git" and (commit := installed_commit(target)) != value:
+                raise PinError(f"{pin.manifest} pins qq at {value}, but pip installed {commit or 'an unknown commit'}")
         except BaseException:
             shutil.rmtree(target, ignore_errors=True)
             raise
@@ -187,6 +238,7 @@ def dispatch(argv: list[str]) -> None:
     pin = read_pin(Path.cwd())
     if pin is None or is_self(pin):
         return
+    check(pin)
     qq = ensure(pin)
     env = {**os.environ, PINNED_ENV: "1"}
     env.pop("PYTHONPATH", None)  # the pinned qq runs its own code, never code shadowing it
