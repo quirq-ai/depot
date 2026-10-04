@@ -1,0 +1,39 @@
+#!/bin/sh
+# qq bootstrap. Put this directory on PATH, like depot_tools.
+#
+# The first run makes a launcher environment from this depot checkout, under
+# $QQ_HOME (default ${XDG_CACHE_HOME:-$HOME/.cache}/qq). The launcher reads the
+# current repo's infra/repo.toml and runs the qq version it pins, installing that
+# version first if this machine does not have it yet.
+set -eu
+
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+depot=$(cd "$(dirname "$self")/.." && pwd -P)
+
+qq_home=${QQ_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/qq}
+interpreter=${QQ_PYTHON:-python3}
+launcher=$qq_home/launcher
+stamp=$launcher/.qq-depot
+want="$depot $(git -C "$depot" rev-parse HEAD 2>/dev/null || echo no-git)"
+
+if [ ! -x "$launcher/bin/qq" ] || [ "$(cat "$stamp" 2>/dev/null || true)" != "$want" ]; then
+  if ! "$interpreter" -c 'import sys, venv; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+    echo "qq: needs $interpreter 3.11 or newer with its venv module (set QQ_PYTHON to use another)." >&2
+    exit 1
+  fi
+  echo "qq: setting up the launcher in $launcher" >&2
+  mkdir -p "$qq_home"
+  rm -rf "$launcher"
+  "$interpreter" -m venv "$launcher"
+  "$launcher/bin/python" -m pip install --quiet --disable-pip-version-check "$depot"
+  printf '%s\n' "$want" > "$stamp"
+fi
+
+exec "$launcher/bin/qq" "$@"
