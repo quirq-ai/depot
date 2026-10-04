@@ -7,6 +7,7 @@ messages) must be identical, file by file. Exit 1 with the differences, or print
 """
 from __future__ import annotations
 
+import difflib
 import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -19,11 +20,18 @@ def normalized(path: Path) -> str:
     for el in root.iter():
         for attr in VOLATILE:
             el.attrib.pop(attr, None)
+        el.attrib = dict(sorted(el.attrib.items()))  # attribute order is not a result
         if el.text is not None and not el.text.strip():
             el.text = None
         if el.tail is not None and not el.tail.strip():
             el.tail = None
     return ET.tostring(root, encoding="unicode")
+
+
+def pretty(xml: str) -> list[str]:
+    root = ET.fromstring(xml)
+    ET.indent(root)
+    return ET.tostring(root, encoding="unicode").splitlines()
 
 
 def results(out: Path) -> dict[str, str]:
@@ -38,7 +46,10 @@ def main(argv: list[str]) -> int:
         return 1
     problems = [f"only in local: {n}" for n in sorted(set(local) - set(ci))]
     problems += [f"only in CI: {n}" for n in sorted(set(ci) - set(local))]
-    problems += [f"differs: {n}" for n in sorted(set(local) & set(ci)) if local[n] != ci[n]]
+    for n in sorted(set(local) & set(ci)):
+        if local[n] != ci[n]:
+            diff = difflib.unified_diff(pretty(ci[n]), pretty(local[n]), "ci/" + n, "local/" + n, lineterm="")
+            problems.append(f"differs: {n}\n" + "\n".join(list(diff)[:60]))
     for p in problems:
         print(p, file=sys.stderr)
     if problems:

@@ -10,9 +10,8 @@ A pin (quirq-repo/1) is a source and a digest. The source's scheme picks the fet
 Each pin is fetched once per machine into $QQ_HOME/store/<algo>-<hex>, unpacked when it is a
 tarball, and never changed after.
 
-TODO(expert): use qqsync.pins (find_pin, fetch, verify_checkout; V0-SYN-03) for the https, file
-and git paths once depot and recipes move their qqsync pin past it together; pip refuses two
-different pins of one package. Keep only the OCI fetch and unpacking here.
+Pins are resolved, fetched (https, file) and verified (every scheme, git checkouts included) by
+qqsync.pins, so depot only adds the OCI registry download, git checkout and unpacking.
 TODO(expert): make store entries read only, so nothing installed into a synced toolchain
 changes the copy other repos share. A half-fetched entry is never visible: it is built in a
 scratch directory and renamed into place.
@@ -22,7 +21,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -33,6 +31,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+from qqsync import pins
 
 from qqdepot.pin import qq_home
 
@@ -48,36 +48,27 @@ class FetchError(Exception):
 
 @dataclass(frozen=True)
 class Artifact:
-    """One thing to fetch: a manifest pin resolved for this platform."""
+    """One thing to fetch: a manifest pin, resolved for this platform by qqsync."""
 
-    name: str
-    source: str
-    digest: str
+    pin: pins.Pin
 
-    @property
-    def algo(self) -> str:
-        return self.digest.partition(":")[0]
+    @classmethod
+    def of(cls, name: str, source: str, digest: str, section: str = "deps") -> Artifact:
+        return cls(pins.Pin(section, name, None, source, digest))
 
-    @property
-    def value(self) -> str:
-        return self.digest.partition(":")[2]
-
-
-def host_platform() -> str:
-    """<os>-<arch> as manifests spell it, for example linux-x86_64 or macos-arm64."""
-    system = {"darwin": "macos"}.get(platform.system().lower(), platform.system().lower())
-    machine = {"amd64": "x86_64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
-    return f"{system}-{machine}"
+    name = property(lambda self: self.pin.label)
+    source = property(lambda self: self.pin.source)
+    digest = property(lambda self: self.pin.digest)
+    algo = property(lambda self: self.pin.algorithm)
+    value = property(lambda self: self.pin.digest.partition(":")[2])
 
 
-def resolve(name: str, pin: dict, where: str) -> Artifact:
-    """The artifact a pin names for this machine's platform."""
-    if "platforms" in pin:
-        here = host_platform()
-        if here not in pin["platforms"]:
-            raise FetchError(f"{where} {name!r} has no build for {here} (it has: {', '.join(pin['platforms'])})")
-        pin = pin["platforms"][here]
-    return Artifact(name, pin["source"], pin["digest"])
+def resolve(manifest: dict, section: str, name: str) -> Artifact:
+    """The artifact `section.name` pins for this machine's platform (qqsync.pins.find_pin)."""
+    try:
+        return Artifact(pins.find_pin(manifest, section, name))
+    except pins.PinError as e:
+        raise FetchError(str(e)) from None
 
 
 def store_dir() -> Path:
@@ -108,36 +99,17 @@ def ensure(artifact: Artifact) -> Path:
 
 
 def _fetch_blob(artifact: Artifact, path: Path) -> Path:
+    """Download the artifact's bytes to `path`, checked against the pin by qqsync."""
     scheme = urllib.parse.urlparse(artifact.source).scheme
-    if scheme == "oci":
-        _download_oci(artifact, path)
-    elif scheme in ("https", "http", "file"):
-        _download(artifact.source, path, {})
-    else:
-        raise FetchError(f"{artifact.name}: cannot fetch {artifact.source!r} with digest {artifact.digest}:"
-                         " use https://, file://, oci:// or a git digest")
-    actual = f"sha256:{_sha256(path)}"
-    if actual != artifact.digest:
-        raise FetchError(f"{artifact.name}: {artifact.source} has digest {actual}, but the manifest pins"
-                         f" {artifact.digest}")
-    return path
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _download(url: str, path: Path, headers: dict[str, str]) -> None:
-    request = urllib.request.Request(url, headers=headers)
     try:
-        with _OPENER.open(request, timeout=120) as response, path.open("wb") as out:
-            shutil.copyfileobj(response, out)
-    except (OSError, ValueError) as e:
-        raise FetchError(f"cannot download {url}: {e}") from None
+        if scheme == "oci":
+            _download_oci(artifact, path)
+            pins.verify_file(artifact.pin, path)
+        else:
+            pins.fetch(artifact.pin, path)  # https:// and file://, verified while downloading
+    except pins.PinError as e:
+        raise FetchError(f"{e}; qq sync fetches https://, file://, oci:// and git commit pins") from None
+    return path
 
 
 def _oci_parts(source: str) -> tuple[str, str, str | None]:
@@ -259,7 +231,7 @@ def _fetch_git(artifact: Artifact, into: Path) -> None:
     git("init", "-q", f"--object-format={'sha256' if len(artifact.value) == 64 else 'sha1'}")
     git("fetch", "-q", "--depth=1", "--end-of-options", artifact.source, artifact.value)
     git("checkout", "-q", "--detach", "FETCH_HEAD")
-    head = subprocess.run(["git", "-C", str(into), "rev-parse", "HEAD"], capture_output=True, text=True,
-                          env=env).stdout.strip()
-    if head != artifact.value:
-        raise FetchError(f"{artifact.name}: {artifact.source} gave commit {head}, not {artifact.value}")
+    try:
+        pins.verify_checkout(artifact.pin, into)
+    except pins.PinError as e:
+        raise FetchError(str(e)) from None
