@@ -23,10 +23,12 @@ jobs:
         repo: [xo-space, innernet]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      QQ_HOME: ${{ runner.temp }}/qq
-      PRODUCT: ${{ runner.temp }}/${{ matrix.repo }}
     steps:
+      # The runner context is not available in job-level env, so these are set here.
+      - name: paths
+        run: |
+          echo "QQ_HOME=$RUNNER_TEMP/qq" >> "$GITHUB_ENV"
+          echo "PRODUCT=$RUNNER_TEMP/${{ matrix.repo }}" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
