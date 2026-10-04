@@ -9,6 +9,7 @@ Read `README.md` first.
 - Manifests (`infra/repo.toml`) are read only through `qqsync`. Never parse one here.
 - Commands that start long work return a run ID at once; the verdict is pushed later. No command
   holds a caller open for a build.
-- Leave `.github/CODEOWNERS` and any `owners` list empty: suraj assigns people.
+- `.github/CODEOWNERS` names suraj (`@sharmasuraj0123`) as owner of the policy and trust paths;
+  owner names are his call, so never change them. Leave any other `owners` list empty.
 - Mark a decision you cannot make with a one-line `TODO(suraj):` or `TODO(expert):`.
 - Never commit secrets, tokens or internal hostnames. This repo is public.
