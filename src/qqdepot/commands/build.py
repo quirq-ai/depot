@@ -24,7 +24,11 @@ def repo_root(start: Path) -> Path | None:
 
 
 def toolchain_args(root: Path) -> list[str]:
-    """--toolchain NAME=ROOT for every toolchain `qq sync` unpacked; others come from PATH."""
+    """--toolchain NAME=ROOT for every toolchain `qq sync` unpacked; others come from PATH.
+
+    TODO(expert): CI must use the same pinned toolchains (and recipes commit) for local and CI
+    results to match; the generated CI workflow (V0-CFG-02, test-pipelines) should run qq sync.
+    """
     synced = root / TOOLCHAINS
     if not synced.is_dir():
         return []

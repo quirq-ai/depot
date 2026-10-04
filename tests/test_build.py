@@ -36,6 +36,8 @@ def repo(tmp_path: Path) -> Path:
         """))
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    "commit", "-q", "-m", "one commit"], check=True)
     return tmp_path
 
 
@@ -71,8 +73,9 @@ def test_failures_match_too(repo, monkeypatch, tmp_path):
 
 def test_build_only_builds(repo, monkeypatch):
     monkeypatch.chdir(repo)
+    (repo / "data" / "b.txt").write_text("bad\n")  # the test would fail; a build must not run it
     assert cli.main(["build", "files"]) == 0
-    assert (repo / "build-out" / "all").read_text() == "good\ngood\n"
+    assert (repo / "build-out" / "all").read_text() == "good\nbad\n"
     assert not (repo / ".qq" / "out" / "junit" / "check.xml").exists()
 
 

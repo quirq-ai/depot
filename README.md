@@ -92,7 +92,7 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 |---|---|---|---|
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | | waiting on V0-SYN-02, V0-TCH-01, V0-TCH-02 |
-| V0-DEP-03 | `qq build` and `qq test` | #3 | in review |
+| V0-DEP-03 | `qq build` and `qq test` | #3 | in review; parity shown in-process with a test adapter (`tests/test_build.py`). The real local-vs-CI comparison waits on recipes' adapters (V0-REC-02/03) and the generated CI workflow |
 | V0-DEP-04 | `qq upload`, `try`, `land`, `status` | | waiting on V0-GAT-01 |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
