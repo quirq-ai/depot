@@ -9,8 +9,10 @@ each a link into the shared store (see store.py), so `qq build` and `qq test` fi
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -49,9 +51,15 @@ def _real_dir(root: Path, rel: Path) -> Path:
     return path
 
 
+STORE_ENTRY = re.compile(r"[a-z0-9]+-[0-9a-f]{16,}")   # store.py's <algo>-<hex> entry names
+
+
 def _ours(link: Path) -> bool:
-    """True for a link qq sync made: one that points into the shared store."""
-    return link.is_symlink() and Path(os.readlink(link)).is_relative_to(store.store_dir())
+    """True for a link qq sync made: one into a store entry, under any QQ_HOME (it may change)."""
+    if not link.is_symlink():
+        return False
+    target = Path(os.readlink(link))
+    return target.parent.name == "store" and STORE_ENTRY.fullmatch(target.name) is not None
 
 
 def _link(target: Path, link: Path) -> None:
@@ -84,7 +92,12 @@ def sync(root: Path) -> list[dict]:
                 if stale.name not in pins and not stale.name.startswith(".") and _ours(stale):
                     stale.unlink()
     record = _real_dir(root, RECORD.parent) / RECORD.name
-    fd = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+    try:
+        fd = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o666)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise store.FetchError(f"{record} is a symlink; remove it and run qq sync again") from None
+        raise
     with os.fdopen(fd, "w") as out:
         out.write(json.dumps(synced, indent=2) + "\n")
     return synced

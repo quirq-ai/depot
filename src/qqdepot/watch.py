@@ -139,7 +139,7 @@ class Watch:
         states = [f["state"] for f in v.get("failing", [])] + list(v.get("checks", {}).values())
         if any(s in gate.RUNNING for s in states):
             return False
-        return all(status == "completed" for status in runs.values())
+        return not any(s in gate.RUNNING for s in runs.values())
 
 
 def watch(args: argparse.Namespace) -> int:

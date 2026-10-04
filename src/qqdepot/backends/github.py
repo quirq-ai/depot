@@ -89,17 +89,18 @@ def view(repo: str, ref: str) -> Change:
 
 
 def runs(repo: str, sha: str) -> dict[int, str]:
-    """Workflow run ID -> status (queued, in_progress, completed, ...) for one commit. GitHub
-    starts runs a moment after a push, so this may be empty when qq returns."""
+    """Workflow run ID -> conclusion, or status while running, for one commit. GitHub starts
+    runs a moment after a push, so this may be empty when qq returns."""
     data = _json(["gh", "run", "list", "--repo", repo, "--commit", sha,
-                  "--json", "databaseId,status", "--limit", "100"])
-    return {int(r["databaseId"]): r["status"] for r in data}
+                  "--json", "databaseId,status,conclusion", "--limit", "100"])
+    return {int(r["databaseId"]): (r.get("conclusion") or r["status"]) if r["status"] == "completed"
+            else r["status"] for r in data}
 
 
 def checks(repo: str, sha: str) -> dict[str, str]:
-    """Check name -> conclusion, or status while running. A re-run is newer and decides.
-    TODO(expert): ungated repos only; commit statuses are not read, and two workflows with a job
-    of the same name count as one."""
+    """Check name -> conclusion, or status while running, for ungated repos: every check run and
+    every commit status (as "status:<context>"). A re-run is newer and decides.
+    TODO(expert): two workflows with a job of the same name count as one."""
     out = _run(["gh", "api", "--paginate", f"repos/{repo}/commits/{sha}/check-runs?per_page=100&filter=all",
                 "--jq", '.check_runs[] | {name, state: (.conclusion // .status), started: (.started_at // "9999")}'])
     seen: dict[str, tuple[str, str]] = {}
@@ -109,7 +110,15 @@ def checks(repo: str, sha: str) -> dict[str, str]:
         run = json.loads(line)
         if run["name"] not in seen or run["started"] >= seen[run["name"]][0]:
             seen[run["name"]] = (run["started"], run["state"])
-    return {name: state for name, (_, state) in seen.items()}
+    out = {name: state for name, (_, state) in seen.items()}
+    # Commit statuses (other CI): pending is still running, failure and error are refusals.
+    statuses = _run(["gh", "api", f"repos/{repo}/commits/{sha}/status",
+                     "--jq", ".statuses[] | {context, state}"])
+    for line in statuses.splitlines():
+        if line.strip():
+            st = json.loads(line)
+            out[f"status:{st['context']}"] = st["state"]
+    return out
 
 
 def enqueue(repo: str, number: int, sha: str, method: str) -> None:

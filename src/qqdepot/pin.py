@@ -58,7 +58,7 @@ class Pin:
 
 def qq_home() -> Path:
     if home := os.environ.get("QQ_HOME"):
-        return Path(home)
+        return Path(home).resolve()   # links into the store must not depend on the cwd
     cache = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     return Path(cache) / "qq"
 

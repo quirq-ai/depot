@@ -91,8 +91,14 @@ def handle(args):
             s["prs"][args[2]]["queued"] = True
             save(s)
         case ["run", "list"]:
-            print(json.dumps([{"databaseId": int(i), "status": st}
-                              for i, st in s["runs"].get(opt(args, "--commit"), {}).items()]))
+            runs = s["runs"].get(opt(args, "--commit"), {}).items()   # "completed" or "completed:<conclusion>"
+            print(json.dumps([{"databaseId": int(i), "status": st.split(":")[0],
+                               "conclusion": (st.split(":") + ["success"])[1] if st.startswith("completed") else ""}
+                              for i, st in runs]))
+        case ["api", path, *_] if path.endswith("/status"):
+            sha = path.split("/commits/")[1].split("/")[0]
+            for context, state in s.get("statuses", {}).get(sha, {}).items():
+                print(json.dumps({"context": context, "state": state}))
         case ["api", "graphql"]:
             n = next(a for a in args if a.startswith("p=")).split("=", 1)[1]
             q = prs[n].get("queued", False)

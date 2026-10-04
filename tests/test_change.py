@@ -259,6 +259,12 @@ def test_status_of_an_ungated_repo_is_strict(world, monkeypatch):
     assert qq("status", check=False).returncode == 1   # skipped verified nothing
     world.set_checks(sha, {})
     assert qq("status", check=False).returncode == 3   # no checks yet is not a pass
+    world.set_checks(sha, {"lint": "success"})
+    world.update(lambda s: s.setdefault("statuses", {}).__setitem__(sha, {"ci/other": "failure"}))
+    assert qq("status", check=False).returncode == 1   # another CI's commit status counts too
+    world.update(lambda s: s["statuses"].__setitem__(sha, {}))
+    world.update(lambda s: s["runs"].__setitem__(sha, {"1": "completed:action_required"}))
+    assert qq("status", check=False).returncode == 1   # a run that never ran its jobs verified nothing
 
 
 def test_a_gate_error_naming_the_ungated_case_is_not_ungated(world, monkeypatch):

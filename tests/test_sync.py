@@ -311,3 +311,17 @@ def test_sync_removes_only_links_into_the_store(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     assert cli.main(["sync"]) == 0
     assert mine.is_symlink()
+
+
+def test_a_dropped_pin_goes_even_when_qq_home_changed(tmp_path, monkeypatch):
+    archive = tmp_path / "hello.tar.gz"
+    archive.write_bytes(tool_tarball())
+    pin = f'[toolchains.hello]\nsource = "{archive.as_uri()}"\ndigest = "{sha256(archive.read_bytes())}"\n'
+    repo = product(tmp_path, pin)
+    monkeypatch.chdir(repo)
+    assert cli.main(["sync"]) == 0
+    manifest = repo / "infra" / "repo.toml"
+    manifest.write_text(manifest.read_text().replace(pin, ""))
+    monkeypatch.setenv("QQ_HOME", str(tmp_path / "another-home"))
+    assert cli.main(["sync"]) == 0
+    assert not (repo / ".qq" / "toolchains" / "hello").is_symlink()

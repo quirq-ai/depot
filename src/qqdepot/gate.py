@@ -144,10 +144,10 @@ def classify_gated(v: dict) -> str:
 def classify_ungated(checks: dict[str, str], runs: dict) -> str:
     """No policy covers the repo, so be strict: every check finished with success, at least one
     check, and no run of the commit still going. Skipped and neutral are refusals here."""
-    if any(s not in RUNNING and s != "success" for s in checks.values()):
+    states = [*checks.values(), *runs.values()]   # a run that did not succeed (action_required) refuses
+    if any(s not in RUNNING and s != "success" for s in states):
         return "refused"
-    if not checks or any(s in RUNNING for s in checks.values()) \
-            or any(status != "completed" for status in runs.values()):
+    if not checks or any(s in RUNNING for s in states):
         return "pending"
     return "pass"
 
