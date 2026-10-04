@@ -90,11 +90,19 @@ jobs:
           path: .qq/out/
           if-no-files-found: error
 
+  # A required check. It always runs, so a red or cancelled parity leg fails it instead of
+  # skipping it: GitHub counts a skipped required check as passing.
   parity-compare:
     needs: parity
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: every parity leg passed
+        if: needs.parity.result != 'success'
+        run: |
+          echo "::error::parity finished ${{ needs.parity.result }}, so local and CI results were not compared"
+          exit 1
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
@@ -105,3 +113,43 @@ jobs:
             echo "== $repo"
             python3 tools/junit_compare.py "results/parity-$repo-local" "results/parity-$repo-ci"
           done
+
+  # V0-DEP-04 against the real services, read-only: the pinned gate installs and computes the
+  # product repos' required checks from infra-config, and `qq status` reads this very change
+  # through the real `gh` (depot is not in infra-config, so it is judged ungated). Submitting
+  # (try, land) is shown end to end with a fake gh in tests/test_change.py.
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --quiet .
+      - name: the pinned gate decides what xo-space and innernet must pass
+        env:
+          QQ_HOME: ${{ runner.temp }}/qq
+        run: |
+          python - <<'PY'
+          from qqdepot import gate
+          for repo, check in (("quirq-ai/xo-space", "xo-space-presubmit"), ("quirq-ai/innernet", "innernet-presubmit")):
+              names = [c["name"] for c in gate.required(repo)["required"]]
+              print(repo, names)
+              assert check in names, (repo, names)
+          assert gate.required("quirq-ai/depot") is None, "depot is not in infra-config, so it is ungated"
+          PY
+      - name: qq status reads this change through gh
+        if: github.event_name == 'pull_request'
+        env:
+          QQ_HOME: ${{ runner.temp }}/qq
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0; qq status "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" || rc=$?
+          # 0 pass, 1 refused, 3 pending (this job is still running); 2 means qq could not decide.
+          [ "$rc" -ne 2 ] || { echo "::error::qq status could not decide"; exit 1; }
