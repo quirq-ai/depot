@@ -44,8 +44,8 @@ def sync(root: Path) -> list[dict]:
     synced = []
     for section, base in SECTIONS:
         pins = manifest.get(section, {})
-        for name, pin in pins.items():
-            artifact = store.resolve(name, pin, f"[{section}]")
+        for name in pins:
+            artifact = store.resolve(manifest, section, name)
             entry = store.ensure(artifact)
             _link(entry, root / base / name)
             synced.append({"section": section, "name": name, "digest": artifact.digest, "path": str(entry)})

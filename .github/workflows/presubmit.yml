@@ -19,14 +19,12 @@ jobs:
           python-version: "3.14"
       - run: python -m pip install --quiet -e ".[test]"
       - run: python -m pytest -q -p no:cacheprovider
-      # sync's "no other parser" check: manifests are read only through qqsync.
-      # Its own environment, so the guard's sync commit can differ from the library pins.
+      # sync's "no other parser" check: manifests are read only through qqsync (the pinned one).
       - name: no second manifest parser
-        run: |
-          python -m venv "$RUNNER_TEMP/guard"
-          "$RUNNER_TEMP/guard/bin/pip" install --quiet "qqsync @ git+https://github.com/quirq-ai/sync@8f624f4a7fe3abdab2c7b83376f1ae7772073fd4"  # TODO(expert): let rollers move this pin.
-          "$RUNNER_TEMP/guard/bin/qqsync" guard .
+        run: qqsync guard .
 
+  # Limits: both runners share paths and user, and a red run fails before the compare, so
+  # parity is shown for green runs; innernet's results are one case per action (no test suite).
   # V0-DEP-03 done-when on the real product repos: `qq test` (what a contributor runs) and
   # `qqrecipes execute` (what CI runs) on separate runners, same commit, same JUnit results.
   # The manifests are sync's onboarding fixtures until onboarding lands infra/repo.toml in each
@@ -50,7 +48,7 @@ jobs:
       - uses: actions/setup-python@v7
         id: python
         with:
-          python-version: "3.14"
+          python-version: "3.14.8"  # the CPython the manifests pin
       - uses: actions/setup-node@v7
         if: matrix.repo == 'innernet'
         with:
@@ -67,7 +65,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: quirq-ai/sync
-          ref: 5abac76af194a40961074ce75432f4fdb79fe951
+          ref: 8f624f4a7fe3abdab2c7b83376f1ae7772073fd4  # the qqsync depot pins
           path: .qq/sync
       - name: give the product its onboarding manifest
         run: |

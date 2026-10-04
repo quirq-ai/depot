@@ -140,24 +140,29 @@ def test_store_is_shared_and_stale_links_go(tmp_path, monkeypatch):
     archive.unlink()  # the store has it now; a second sync must not fetch again
     assert cli.main(["sync"]) == 0
 
+    busy = repo / ".qq" / "toolchains" / ".other.123.tmp"  # another sync's link, mid-swap
+    busy.symlink_to(tmp_path)
     manifest = repo / "infra" / "repo.toml"
     manifest.write_text(manifest.read_text().replace(pin, ""))
     assert cli.main(["sync"]) == 0
     assert not (repo / ".qq" / "toolchains" / "hello").exists()
+    assert busy.is_symlink()
 
 
 def test_platform_pins(monkeypatch):
-    pin = {"platforms": {"linux-x86_64": {"source": "https://example.invalid/a", "digest": "sha256:" + "a" * 64}}}
-    monkeypatch.setattr(store, "host_platform", lambda: "linux-x86_64")
-    assert store.resolve("t", pin, "[toolchains]").source == "https://example.invalid/a"
-    monkeypatch.setattr(store, "host_platform", lambda: "macos-arm64")
-    with pytest.raises(store.FetchError, match="no build for macos-arm64"):
-        store.resolve("t", pin, "[toolchains]")
+    from qqsync import pins
+    data = {"toolchains": {"t": {"platforms": {"linux-x86_64": {"source": "https://example.invalid/a",
+                                                              "digest": "sha256:" + "a" * 64}}}}}
+    monkeypatch.setattr(pins, "current_platform", lambda: "linux-x86_64")
+    assert store.resolve(data, "toolchains", "t").source == "https://example.invalid/a"
+    monkeypatch.setattr(pins, "current_platform", lambda: "macos-arm64")
+    with pytest.raises(store.FetchError, match="no pin for platform macos-arm64"):
+        store.resolve(data, "toolchains", "t")
 
 
 def test_unknown_scheme(tmp_path):
     with pytest.raises(store.FetchError, match="cannot fetch"):
-        store.ensure(store.Artifact("t", "ftp://example.invalid/x", "sha256:" + "a" * 64))
+        store.ensure(store.Artifact.of("t", "ftp://example.invalid/x", "sha256:" + "a" * 64))
 
 
 class Registry(BaseHTTPRequestHandler):
@@ -217,7 +222,7 @@ def test_oci_toolchain(tmp_path, monkeypatch, registry):
     assert "hello from the registry" in log
 
     # A layer that is not in the named manifest is refused, even though the blob exists.
-    bad = store.Artifact("hello", f"oci://{registry}/tc/hello@{sha256(manifest)}", sha256(other))
+    bad = store.Artifact.of("hello", f"oci://{registry}/tc/hello@{sha256(manifest)}", sha256(other))
     with pytest.raises(store.FetchError, match="has no layer"):
         store.ensure(bad)
 
@@ -238,13 +243,13 @@ def test_archive_cannot_write_outside_the_store(tmp_path):
     archive = tmp_path / "evil.tar.gz"
     archive.write_bytes(buf.getvalue())
     with pytest.raises(store.FetchError, match="cannot unpack"):
-        store.ensure(store.Artifact("evil", archive.as_uri(), sha256(archive.read_bytes())))
+        store.ensure(store.Artifact.of("evil", archive.as_uri(), sha256(archive.read_bytes())))
     assert victim.read_text() == "safe\n"
 
 
 def test_git_source_cannot_be_an_option(tmp_path):
     marker = tmp_path / "PWNED"
-    bad = store.Artifact("dep", f"--upload-pack=touch {marker};false", "git:" + "a" * 40)
+    bad = store.Artifact.of("dep", f"--upload-pack=touch {marker};false", "git:" + "a" * 40)
     with pytest.raises(store.FetchError, match="not a repository URL"):
         store.ensure(bad)
     assert not marker.exists()
@@ -275,6 +280,6 @@ def test_plain_http_only_for_a_local_registry(monkeypatch):
     monkeypatch.setenv("QQ_OCI_SCHEME", "http")
     urls = []
     monkeypatch.setattr(store, "_oci_get", lambda url, *a, **k: urls.append(url) or b"")
-    art = store.Artifact("t", "oci://registry.example/r", "sha256:" + "a" * 64)
+    art = store.Artifact.of("t", "oci://registry.example/r", "sha256:" + "a" * 64)
     store._download_oci(art, Path("/dev/null"))
     assert urls[-1].startswith("https://registry.example/")

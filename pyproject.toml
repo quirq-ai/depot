@@ -10,8 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11.4"
 # Other qq repos by pinned commit, never by copying code. TODO(expert): let rollers move this pin.
 dependencies = [
-    "qqsync @ git+https://github.com/quirq-ai/sync@5abac76af194a40961074ce75432f4fdb79fe951",
-    "qqrecipes @ git+https://github.com/quirq-ai/recipes@c3b0cafa72da512e14eae90f5d0bac49692b835b",
+    "qqsync @ git+https://github.com/quirq-ai/sync@8f624f4a7fe3abdab2c7b83376f1ae7772073fd4",
+    "qqrecipes @ git+https://github.com/quirq-ai/recipes@c6d8f3064d535fc51a5c90ed1a8cb03d03b4a817",
 ]
 
 [project.optional-dependencies]
