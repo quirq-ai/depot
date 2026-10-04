@@ -146,3 +146,7 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the delivered workflows (xo-space #211, innernet #37) and the rulesets (V0-ORG-03) |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE).

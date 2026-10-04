@@ -92,8 +92,8 @@ def run_land(args, be) -> int:
     method = args.method
     if method is None:
         req = gate.required(change.repo)
-        # TODO(suraj): merge method for repos the gate does not cover (gate.toml covers the rest).
-        method = req["merge_method"] if req else "merge"
+        # suraj, 2026-10-04: squash and merge is the default policy; gate.toml decides gated repos.
+        method = req["merge_method"] if req else "squash"
     # Nothing is queued before the gate passes: without a merge queue, gh would merge at once.
     v = gate.verdict(change.repo, change.head, be)
     if v["result"] == "refused":
@@ -162,7 +162,7 @@ def register(sub) -> None:
     p.set_defaults(run=_wrap(run_try))
     p = sub.add_parser("land", parents=[common, watching, changing], help="land through the gate; returns at once")
     p.add_argument("--method", choices=("merge", "squash", "rebase"),
-                   help="merge method (default: gate.toml merge_method for gated repos)")
+                   help="merge method (default: gate.toml merge_method for gated repos, else squash)")
     p.set_defaults(run=_wrap(run_land))
     p = sub.add_parser("status", parents=[common, changing],
                        help="the gate's verdict now (exit 0 pass, 1 refused, 3 pending)")
