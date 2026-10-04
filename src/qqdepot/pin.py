@@ -116,10 +116,21 @@ def _base(url: str) -> str:
     return url.rstrip("/").removesuffix(".git")
 
 
+def _plain(url: str) -> bool:
+    """A URL whose text is what git and urllib will fetch: no "." or ".." segments, escapes,
+    user info, query, fragment or backslashes, which could make a prefix match lie."""
+    parts = urllib.parse.urlsplit(url)
+    segments = parts.path.split("/")
+    return (bool(parts.scheme) and not parts.query and not parts.fragment and "@" not in parts.netloc
+            and "%" not in url and "\\" not in url and "." not in segments and ".." not in segments)
+
+
 def trusted(source: str) -> bool:
     """Whether a pin may install qq from `source`: the depot qq uses ($QQ_DEPOT_URL, default
     quirq-ai/depot) or what the user trusts in $QQ_TRUSTED_SOURCES (space separated), and
     anything under those (release archives). A repo's manifest alone never picks a new host."""
+    if not _plain(source):
+        return False
     bases = [DEFAULT_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""), *os.environ.get(TRUSTED_ENV, "").split()]
     src = _base(source)
     return any(b and (src == _base(b) or src.startswith(_base(b) + "/")) for b in bases)

@@ -74,6 +74,12 @@ def test_requirement_by_commit_from_the_depot(monkeypatch, tmp_path):
     ("https://github.com/quirq-ai/depot-evil", False),
     ("https://github.com/someone/depot", False),
     ("https://example.invalid/depot", False),
+    ("https://github.com/quirq-ai/depot/../../evil/depot", False),
+    ("https://github.com/quirq-ai/depot/%2e%2e/evil", False),
+    ("https://github.com/quirq-ai/depot@evil.invalid/x", False),
+    ("https://user@github.com/quirq-ai/depot", False),
+    ("https://github.com/quirq-ai/depot?x=/evil", False),
+    ("github.com/quirq-ai/depot", False),
 ])
 def test_only_the_depot_is_trusted_by_default(monkeypatch, source, ok):
     monkeypatch.delenv("QQ_DEPOT_URL", raising=False)
