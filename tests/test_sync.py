@@ -242,7 +242,7 @@ def test_archive_cannot_write_outside_the_store(tmp_path):
         tar.addfile(member, io.BytesIO(data))
     archive = tmp_path / "evil.tar.gz"
     archive.write_bytes(buf.getvalue())
-    with pytest.raises(store.FetchError, match="cannot unpack"):
+    with pytest.raises(store.FetchError, match="cannot unpack|hard link"):
         store.ensure(store.Artifact.of("evil", archive.as_uri(), sha256(archive.read_bytes())))
     assert victim.read_text() == "safe\n"
 
@@ -325,3 +325,38 @@ def test_a_dropped_pin_goes_even_when_qq_home_changed(tmp_path, monkeypatch):
     monkeypatch.setenv("QQ_HOME", str(tmp_path / "another-home"))
     assert cli.main(["sync"]) == 0
     assert not (repo / ".qq" / "toolchains" / "hello").is_symlink()
+
+
+def _tar(tmp_path, members) -> Path:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, kind, value in members:
+            info = tarfile.TarInfo(name)
+            if kind == "sym":
+                info.type, info.linkname = tarfile.SYMTYPE, value
+                tar.addfile(info)
+            elif kind == "dir":
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                tar.addfile(info)
+            else:
+                info.size = len(value)
+                tar.addfile(info, io.BytesIO(value))
+    path = tmp_path / f"a{len(list(tmp_path.glob('a*.tar.gz')))}.tar.gz"
+    path.write_bytes(buf.getvalue())
+    return path
+
+
+def test_a_symlink_chain_cannot_leave_the_store_on_any_python(tmp_path):
+    """The shape of the "data" filter bypasses fixed in 3.11.13/3.12.11/3.13.4: a link to "."
+    makes a later link's ".." climb out. qq refuses it before tarfile sees it."""
+    archive = _tar(tmp_path, [("a", "sym", "."), ("a/l", "sym", ".."), ("a/l/escape.txt", "file", b"x")])
+    with pytest.raises(store.FetchError, match="under a symlink"):
+        store.ensure(store.Artifact.of("evil", archive.as_uri(), sha256(archive.read_bytes())))
+    assert not (tmp_path / "qq-home" / "escape.txt").exists()
+
+
+def test_toolchain_style_relative_links_still_unpack(tmp_path):
+    archive = _tar(tmp_path, [("./lib", "dir", None), ("./lib/npm-cli.js", "file", b"npm\n"),
+                              ("./bin", "dir", None), ("./bin/npm", "sym", "../lib/npm-cli.js")])
+    entry = store.ensure(store.Artifact.of("node", archive.as_uri(), sha256(archive.read_bytes())))
+    assert (entry / "bin" / "npm").read_text() == "npm\n"
