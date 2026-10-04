@@ -104,10 +104,14 @@ qq status [CHANGE]                # the gate's verdict now: exit 0 pass, 1 refus
 
 Acknowledge, then push: `qq try` and `qq land` return a run ID at once, so an agent never holds a
 tool call open while CI runs. A watcher follows the change and delivers the verdict (pass,
-refused, landed, superseded by a newer push, closed, timed-out or error) to
-`$QQ_HOME/verdicts/<run ID>.json` and to the `--notify` command (default `$QQ_NOTIFY`), which
-gets the verdict JSON on stdin and `QQ_VERDICT` in its environment. An agent harness plugs its own
-channel in there.
+refused, landed, dequeued by the merge queue, superseded by a newer push, closed, timed-out or
+error) to `$QQ_HOME/verdicts/<run ID>.json` and to the `--notify` command (default `$QQ_NOTIFY`),
+which gets the verdict JSON on stdin and `QQ_VERDICT` in its environment. An agent harness plugs
+its own channel in there. The command line shows in `ps` and in the receipt, so pass secrets
+through the environment. If the watcher dies (a reboot), `qq status` still gives the verdict.
+
+`qq land` queues nothing until the gate passes: without a merge queue, GitHub would merge at
+once. A refused change is not queued, and a change the queue drops is reported as dequeued.
 
 qq does not decide what must pass. It runs [gate](https://github.com/quirq-ai/gate)'s `qqgate`
 at the commit `src/qqdepot/gate.py` pins, in its own environment under `$QQ_HOME/gate`, with

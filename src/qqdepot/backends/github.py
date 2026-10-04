@@ -11,7 +11,7 @@ import subprocess
 
 from qqdepot.backends import Change, ChangeError
 
-FIELDS = "number,url,state,headRefOid,baseRefName,headRefName"
+FIELDS = "number,url,state,headRefOid,baseRefName,headRefName,isCrossRepository"
 
 
 def _run(cmd: list[str], cwd=None) -> str:
@@ -65,34 +65,40 @@ def push(root, base: str) -> str:
 
 
 def find(repo: str, branch: str) -> Change | None:
+    # --head matches a branch of that name in any fork, so keep only this repo's own branch.
     prs = _json(["gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "open",
-                 "--json", FIELDS, "--limit", "1"])
-    return _change(repo, prs[0]) if prs else None
+                 "--json", FIELDS, "--limit", "100"])
+    own = [pr for pr in prs if not pr.get("isCrossRepository")]
+    return _change(repo, own[0]) if own else None
 
 
 def create(repo: str, branch: str, base: str, title: str | None, body: str | None, draft: bool) -> Change:
     cmd = ["gh", "pr", "create", "--repo", repo, "--head", branch, "--base", base]
+    if body and not title:
+        raise ChangeError("--body needs --title (without both, the title and body come from the commits)")
     cmd += ["--title", title, "--body", body or ""] if title else ["--fill"]
     if draft:
         cmd.append("--draft")
-    _run(cmd)
-    return view(repo, branch)
+    url = _run(cmd).strip().splitlines()[-1]   # gh prints the new change's URL last
+    return view(repo, url)
 
 
 def view(repo: str, ref: str) -> Change:
-    return _change(repo, _json(["gh", "pr", "view", str(ref), "--repo", repo, "--json", FIELDS]))
+    return _change(repo, _json(["gh", "pr", "view", "--repo", repo, "--json", FIELDS, "--", str(ref)]))
 
 
-def runs(repo: str, sha: str) -> list[int]:
-    """Workflow run IDs for one commit. GitHub starts them a moment after a push, so this may be
-    empty when qq returns; the watcher and qq status read them again."""
+def runs(repo: str, sha: str) -> dict[int, str]:
+    """Workflow run ID -> status (queued, in_progress, completed, ...) for one commit. GitHub
+    starts runs a moment after a push, so this may be empty when qq returns."""
     data = _json(["gh", "run", "list", "--repo", repo, "--commit", sha,
-                  "--json", "databaseId", "--limit", "100"])
-    return sorted(int(r["databaseId"]) for r in data)
+                  "--json", "databaseId,status", "--limit", "100"])
+    return {int(r["databaseId"]): r["status"] for r in data}
 
 
 def checks(repo: str, sha: str) -> dict[str, str]:
-    """Check name -> conclusion, or status while running. A re-run is newer and decides."""
+    """Check name -> conclusion, or status while running. A re-run is newer and decides.
+    TODO(expert): ungated repos only; commit statuses are not read, and two workflows with a job
+    of the same name count as one."""
     out = _run(["gh", "api", "--paginate", f"repos/{repo}/commits/{sha}/check-runs?per_page=100&filter=all",
                 "--jq", '.check_runs[] | {name, state: (.conclusion // .status), started: (.started_at // "9999")}'])
     seen: dict[str, tuple[str, str]] = {}
@@ -106,9 +112,21 @@ def checks(repo: str, sha: str) -> dict[str, str]:
 
 
 def enqueue(repo: str, number: int, sha: str, method: str) -> None:
-    """Merge once required checks pass (the merge queue when the repo has one). Returns at once.
-    --match-head-commit refuses if someone pushed after the commit the gate is judging."""
+    """Land a change the gate has passed: into the merge queue where the repo has one, else
+    merged now (gh merges at once when nothing blocks, even with --auto, so qq only calls this
+    after the gate's pass). Returns at once. --match-head-commit refuses if someone pushed after
+    the commit the gate judged."""
     _run(["gh", "pr", "merge", str(number), "--repo", repo, "--auto", f"--{method}", "--match-head-commit", sha])
+
+
+def queued(repo: str, number: int) -> bool:
+    """True while the change waits to land: in the merge queue, or with auto-merge on."""
+    owner, name = repo.split("/", 1)
+    q = ("query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p)"
+         "{isInMergeQueue autoMergeRequest{enabledAt}}}}")
+    pr = _json(["gh", "api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"n={name}",
+                "-F", f"p={number}"])["data"]["repository"]["pullRequest"]
+    return bool(pr["isInMergeQueue"] or pr["autoMergeRequest"])
 
 
 def token() -> str | None:

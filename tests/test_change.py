@@ -3,6 +3,7 @@
 The done-when: an agent opens a change with `qq try`, gets a run ID back while CI is still
 running, and later receives the verdict through --notify without any call of its own waiting.
 """
+import fcntl
 import json
 import os
 import subprocess
@@ -60,11 +61,13 @@ def world(tmp_path, monkeypatch):
             return json.loads(state.read_text())
 
         def update(self, fn):
-            s = self.read()
-            fn(s)
-            tmp = state.with_suffix(".tmp")
-            tmp.write_text(json.dumps(s))
-            os.replace(tmp, state)
+            with open(f"{state}.lock", "w") as lock:   # the fake gh holds it too
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                s = self.read()
+                fn(s)
+                tmp = state.with_suffix(".tmp")
+                tmp.write_text(json.dumps(s))
+                os.replace(tmp, state)
 
         def head(self):
             return git(work, "rev-parse", "HEAD")
@@ -107,7 +110,7 @@ def test_try_returns_a_run_id_at_once_and_the_verdict_is_pushed_later(world):
     cmd, pushed = notify_cmd(world.tmp)
     sha = world.head()
     world.set_checks(sha, {"demo-presubmit": "in_progress"})
-    world.update(lambda s: s["runs"].__setitem__(sha, [4242]))
+    world.update(lambda s: s["runs"].__setitem__(sha, {"4242": "in_progress"}))
 
     start = time.monotonic()
     receipt = json.loads(qq("try", "--json", "--notify", cmd, "--interval", "0.2", "--deadline", "60").stdout)
@@ -157,7 +160,7 @@ def test_a_new_push_supersedes_the_watched_commit(world):
     assert wait_for(pushed)["result"] == "superseded"
 
 
-def test_land_enqueues_with_the_gate_merge_method_and_pushes_landed(world):
+def test_land_after_a_pass_enqueues_now_with_the_gate_merge_method(world):
     cmd, pushed = notify_cmd(world.tmp)
     sha = world.head()
     qq("upload")
@@ -166,9 +169,62 @@ def test_land_enqueues_with_the_gate_merge_method_and_pushes_landed(world):
     assert receipt["run_id"].startswith("land-")
     assert world.read()["merges"] == [["1", "--repo", REPO, "--auto", "--squash", "--match-head-commit", sha]]
     time.sleep(1)
-    assert not pushed.exists()   # the gate passed, but land waits for the merge itself
+    assert not pushed.exists()   # queued, not merged yet
     world.update(lambda s: s["prs"]["1"].update(state="MERGED", headRefOid=sha))
     assert wait_for(pushed)["result"] == "landed"
+
+
+def test_land_while_ci_runs_enqueues_only_after_the_gate_passes(world):
+    cmd, pushed = notify_cmd(world.tmp)
+    sha = world.head()
+    qq("upload")
+    world.set_checks(sha, {"demo-presubmit": "in_progress"})
+    qq("land", "--notify", cmd, "--interval", "0.2", "--deadline", "60")
+    time.sleep(1)
+    assert world.read()["merges"] == []   # gh would merge at once without a merge queue
+    world.set_checks(sha, {"demo-presubmit": "success"})
+    end = time.monotonic() + 30
+    while not world.read()["merges"] and time.monotonic() < end:
+        time.sleep(0.1)
+    assert world.read()["merges"][0][-1] == sha
+    world.update(lambda s: s["prs"]["1"].update(state="MERGED", headRefOid=sha))
+    assert wait_for(pushed)["result"] == "landed"
+
+
+def test_land_reports_a_change_the_queue_dropped(world):
+    cmd, pushed = notify_cmd(world.tmp)
+    qq("upload")
+    world.set_checks(world.head(), {"demo-presubmit": "success"})
+    qq("land", "--notify", cmd, "--interval", "0.2", "--deadline", "60")
+    world.update(lambda s: s["prs"]["1"].update(queued=False))   # its merge result failed
+    assert wait_for(pushed)["result"] == "dequeued"
+
+
+def test_land_of_a_refused_change_queues_nothing(world):
+    qq("upload")
+    world.set_checks(world.head(), {"demo-presubmit": "failure"})
+    p = qq("land", check=False)
+    assert p.returncode == 1 and "refused" in p.stdout
+    assert world.read()["merges"] == []
+
+
+def test_a_required_check_that_never_reports_is_refused_once_runs_finish(world):
+    qq("upload")
+    sha = world.head()
+    world.set_checks(sha, {"other": "success"})
+    world.update(lambda s: s["runs"].__setitem__(sha, {"7": "in_progress"}))
+    assert qq("status", check=False).returncode == 3
+    world.update(lambda s: s["runs"].__setitem__(sha, {"7": "completed"}))
+    assert qq("status", check=False).returncode == 1
+
+
+def test_upload_ignores_a_fork_change_with_the_same_branch_name(world):
+    world.update(lambda s: s["prs"].__setitem__("1", {
+        "number": 1, "url": f"https://github.com/{REPO}/pull/1", "state": "OPEN", "headRefOid": "f" * 40,
+        "baseRefName": "main", "headRefName": "feature", "isCrossRepository": True, "title": "a fork"}))
+    git(world.work, "push", "-q", "origin", "feature")   # the fake reads open heads from origin
+    change = json.loads(qq("upload", "--json").stdout)
+    assert change["number"] == 2
 
 
 def test_status_exit_codes(world):

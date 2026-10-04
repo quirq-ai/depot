@@ -10,9 +10,10 @@
   find(repo, branch)             the open change for a branch, or None
   create(repo, branch, base, title, body, draft)
   view(repo, ref)                one change (number, URL or branch) as a Change
-  runs(repo, sha)                the backend's run IDs for one commit
+  runs(repo, sha)                the backend's run IDs for one commit, with their status
   checks(repo, sha)              check name -> conclusion (or status while running)
-  enqueue(repo, number, sha, method)   land once the gate passes; returns at once
+  enqueue(repo, number, sha, method)   land it (merge queue, or merge); returns at once
+  queued(repo, number)           True while it waits to land
   token()                        a credential the gate can read check results with, or None
 """
 from __future__ import annotations

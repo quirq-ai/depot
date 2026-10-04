@@ -3,13 +3,14 @@
 
 Change heads come from the real bare repo the test pushes to ($FAKE_ORIGIN), so a push moves them.
 """
+import fcntl
 import json
 import os
 import subprocess
 import sys
 
 STATE = os.environ["FAKE_GH_STATE"]
-FIELDS = ("number", "url", "state", "headRefOid", "baseRefName", "headRefName")
+FIELDS = ("number", "url", "state", "headRefOid", "baseRefName", "headRefName", "isCrossRepository")
 
 
 def load():
@@ -41,6 +42,13 @@ def pr_json(s, pr):
 
 
 def main(args):
+    # One writer at a time: the watcher calls gh while the test changes the state (see World.update).
+    with open(f"{STATE}.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return handle(args)
+
+
+def handle(args):
     s = load()
     s["calls"].append(args)
     save(s)
@@ -59,14 +67,14 @@ def main(args):
             branch = opt(args, "--head")
             prs[str(n)] = {"number": n, "url": f"https://github.com/{s['repo']}/pull/{n}", "state": "OPEN",
                            "headRefOid": head(branch), "baseRefName": opt(args, "--base"), "headRefName": branch,
-                           "title": opt(args, "--title", "(from commits)")}
+                           "isCrossRepository": False, "title": opt(args, "--title", "(from commits)")}
             save(s)
             print(prs[str(n)]["url"])
         case ["pr", "view"]:
-            ref = args[2].rsplit("/", 1)[-1]
+            ref = args[args.index("--") + 1].rsplit("/", 1)[-1]
             pr = prs.get(ref) or next((p for p in prs.values() if p["headRefName"] == ref), None)
             if pr is None:
-                print(f"no pull requests found for {args[2]}", file=sys.stderr)
+                print(f"no pull requests found for {ref}", file=sys.stderr)
                 return 1
             print(json.dumps(pr_json(s, pr)))
         case ["pr", "merge"]:
@@ -74,9 +82,16 @@ def main(args):
                 print("head moved", file=sys.stderr)
                 return 1
             s["merges"].append(args[2:])
+            s["prs"][args[2]]["queued"] = True
             save(s)
         case ["run", "list"]:
-            print(json.dumps([{"databaseId": i} for i in s["runs"].get(opt(args, "--commit"), [])]))
+            print(json.dumps([{"databaseId": int(i), "status": st}
+                              for i, st in s["runs"].get(opt(args, "--commit"), {}).items()]))
+        case ["api", "graphql"]:
+            n = next(a for a in args if a.startswith("p=")).split("=", 1)[1]
+            q = prs[n].get("queued", False)
+            print(json.dumps({"data": {"repository": {"pullRequest": {
+                "isInMergeQueue": q, "autoMergeRequest": None}}}}))
         case ["api", "--paginate"]:
             sha = args[2].split("/commits/")[1].split("/")[0]
             for name, state in s["checks"].get(sha, {}).items():

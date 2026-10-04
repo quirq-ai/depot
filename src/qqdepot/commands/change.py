@@ -58,10 +58,18 @@ def run_upload(args, be) -> int:
     return 0
 
 
-def _receipt(args, kind: str, change, be) -> int:
+def _runs(be, change) -> list[int]:
+    """Best effort: the watcher is already running, so a failure here must not read as one."""
+    try:
+        return sorted(be.runs(change.repo, change.head))
+    except ChangeError:
+        return []
+
+
+def _receipt(args, kind: str, change, be, **land) -> int:
     notify = args.notify if args.notify is not None else os.environ.get(watch.NOTIFY_ENV)
-    w = watch.spawn(kind, args.backend, change, notify or None, args.interval, args.deadline)
-    receipt = {**w, "change": change.to_json(), "runs": be.runs(change.repo, change.head)}
+    w = watch.spawn(kind, args.backend, change, notify or None, args.interval, args.deadline, **land)
+    receipt = {**w, "change": change.to_json(), "runs": _runs(be, change)}
     lines = [f"{kind} {w['run_id']}: {change.url} at {change.head[:12]}",
              f"  the verdict is pushed to {w['verdict_file']}" + (f" and to {notify}" if notify else ""),
              f"  qq status {change.number} --repo {change.repo} shows it now"]
@@ -85,8 +93,17 @@ def run_land(args, be) -> int:
         req = gate.required(change.repo)
         # TODO(suraj): merge method for repos the gate does not cover (gate.toml covers the rest).
         method = req["merge_method"] if req else "merge"
-    be.enqueue(change.repo, change.number, change.head, method)
-    return _receipt(args, "land", change, be)
+    # Nothing is queued before the gate passes: without a merge queue, gh would merge at once.
+    v = gate.verdict(change.repo, change.head, be)
+    if v["result"] == "refused":
+        data = {"result": "refused", "change": change.to_json(), "verdict": v}
+        _print(args, data, [f"{change.url} at {change.head[:12]}: refused, so not landing it"]
+               + [f"  failing  {f['name']} ({f['state']})" for f in v.get("failing", [])]
+               + [f"  missing  {n}" for n in v.get("missing", [])])
+        return 1
+    if v["result"] == "pass":
+        be.enqueue(change.repo, change.number, change.head, method)
+    return _receipt(args, "land", change, be, method=method, enqueued=v["result"] == "pass")
 
 
 def run_status(args, be) -> int:

@@ -147,12 +147,22 @@ def classify_ungated(checks: dict[str, str]) -> str:
     return "pass"
 
 
+def _all_finished(backend, repo: str, sha: str) -> bool:
+    runs = backend.runs(repo, sha)
+    return bool(runs) and all(status == "completed" for status in runs.values())
+
+
 def verdict(repo: str, sha: str, backend) -> dict:
     """{"result": pass|refused|pending, "gated": bool, ...} for one commit."""
     token = backend.token()
     rc, data, err = _qqgate(["verdict", "--repo", gated_name(repo), "--sha", sha], token)
     if data is not None:
-        return {"result": classify_gated(data), "gated": True, "sha": sha, **data}
+        result = classify_gated(data)
+        if result == "pending" and not data["failing"] and _all_finished(backend, repo, sha):
+            # A required check that never reported verified nothing (the gate's rule), and once
+            # every run of this commit has finished, nothing is left that could report it.
+            result = "refused"
+        return {"result": result, "gated": True, "sha": sha, **data}
     if UNGATED_MARK in err:
         checks = backend.checks(repo, sha)
         return {"result": classify_ungated(checks), "gated": False, "sha": sha, "checks": checks}

@@ -29,7 +29,8 @@ from qqdepot.pin import qq_home
 
 DEFAULT_INTERVAL = 30        # seconds between looks at the change
 DEFAULT_DEADLINE = 3 * 3600  # give up and say so after this long
-MAX_ERRORS = 5               # consecutive backend errors before the watcher reports one
+ERROR_BUDGET = 600           # seconds of backend errors in a row before the watcher reports one
+NO_RUNS_GRACE = 600          # seconds with no run at all for the commit before it is refused
 NOTIFY_ENV = "QQ_NOTIFY"
 
 
@@ -42,7 +43,9 @@ def verdict_path(rid: str) -> Path:
 
 
 def spawn(kind: str, backend: str, change: Change, notify: str | None,
-          interval: float = DEFAULT_INTERVAL, deadline: float = DEFAULT_DEADLINE) -> dict:
+          interval: float = DEFAULT_INTERVAL, deadline: float = DEFAULT_DEADLINE,
+          method: str | None = None, enqueued: bool = False) -> dict:
+    """`method` is how a land merges once the gate passes; `enqueued` says it already is queued."""
     """Start the watcher detached from this process and return what the agent needs at once."""
     rid = run_id(kind, change)
     out = verdict_path(rid)
@@ -54,7 +57,11 @@ def spawn(kind: str, backend: str, change: Change, notify: str | None,
            "--interval", str(interval), "--deadline", str(deadline)]
     if notify:
         cmd += ["--notify", notify]
-    with log.open("w") as fh:
+    if method:
+        cmd += ["--method", method]
+    if enqueued:
+        cmd.append("--enqueued")
+    with log.open("a") as fh:   # append: an earlier watcher of this commit may still be writing
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                              cwd=out.parent, start_new_session=True, close_fds=True)
     return {"run_id": rid, "verdict_file": str(out), "log": str(log), "watcher_pid": p.pid}
@@ -77,40 +84,61 @@ def deliver(rid: str, payload: dict, notify: str | None) -> None:
         print(f"qq: notify command failed: {e}", flush=True)
 
 
-def decide(kind: str, change: Change, sha: str, backend) -> tuple[str | None, dict | None]:
-    """(final result or None to keep watching, gate verdict if one was read)."""
-    if change.head != sha:
-        return "superseded", None     # someone pushed again; that commit needs its own try
-    if change.state == "merged":
-        return ("landed" if kind == "land" else "pass"), None
-    if change.state == "closed":
-        return "closed", None
-    v = gate.verdict(change.repo, sha, backend)
-    if v["result"] == "refused":
-        return "refused", v
-    if v["result"] == "pass" and kind == "try":
-        return "pass", v
-    return None, v                    # land waits for the merge itself, after the gate passes
+class Watch:
+    """One change followed until it has a final result."""
+
+    def __init__(self, args, backend):
+        self.args, self.backend = args, backend
+        self.enqueued = args.enqueued
+        self.unqueued = 0     # looks in a row that found a land neither queued nor merged
+        self.started = time.monotonic()
+
+    def look(self, change: Change) -> tuple[str | None, dict | None]:
+        """(final result or None to keep watching, gate verdict if one was read)."""
+        a, be = self.args, self.backend
+        if change.state == "merged":
+            return "landed", None
+        if change.head != a.sha:
+            return "superseded", None     # someone pushed again; that commit needs its own try
+        if change.state == "closed":
+            return "closed", None
+        if a.kind == "land" and self.enqueued:
+            # Merged is checked first; the queue can drop a change whose merge result failed.
+            # Two looks in a row, so a merge that has not shown up as merged yet is not a drop.
+            self.unqueued = 0 if be.queued(change.repo, change.number) else self.unqueued + 1
+            return ("dequeued", gate.verdict(change.repo, a.sha, be)) if self.unqueued >= 2 else (None, None)
+        v = gate.verdict(change.repo, a.sha, be)
+        if v["result"] == "refused":
+            return "refused", v
+        if v["result"] == "pass":
+            if a.kind == "try":
+                return "pass", v
+            be.enqueue(change.repo, change.number, a.sha, a.method)   # land only after the gate's pass
+            self.enqueued = True
+            return None, v
+        if time.monotonic() - self.started > NO_RUNS_GRACE and not be.runs(change.repo, a.sha):
+            return "refused", {**v, "reason": "no workflow ran for this commit"}
+        return None, v
 
 
 def watch(args: argparse.Namespace) -> int:
     backend = backends.load(args.backend)
-    start, errors, last = time.monotonic(), 0, None
-    change = None
+    w = Watch(args, backend)
+    first_error, last, change = None, None, None
     while True:
         try:
             change = backend.view(args.repo, args.number)
-            result, last = decide(args.kind, change, args.sha, backend)
-            errors = 0
-        except ChangeError as e:   # may be passing (network, rate limit): try again
-            errors += 1
+            result, last = w.look(change)
+            first_error = None
+        except ChangeError as e:   # may be passing (network, rate limit, token): try again
             print(f"qq: {e}", flush=True)
-            result = "error" if errors >= MAX_ERRORS else None
+            first_error = first_error or time.monotonic()
+            result = "error" if time.monotonic() - first_error > ERROR_BUDGET else None
             if result:
                 last = {"error": str(e)}
         except Exception as e:     # a bug: report it now rather than die without a verdict
             result, last = "error", {"error": f"internal error: {type(e).__name__}: {e}"}
-        if result is None and time.monotonic() - start > args.deadline:
+        if result is None and time.monotonic() - w.started > args.deadline:
             result = "timed-out"
         if result is not None:
             rid = f"{args.kind}-{args.repo.replace('/', '-')}-{args.number}-{args.sha[:12]}"
@@ -131,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--number", type=int, required=True)
     ap.add_argument("--sha", required=True)
     ap.add_argument("--notify")
+    ap.add_argument("--method", help="land: merge method once the gate passes")
+    ap.add_argument("--enqueued", action="store_true", help="land: already queued")
     ap.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
     ap.add_argument("--deadline", type=float, default=DEFAULT_DEADLINE)
     return watch(ap.parse_args(argv))
