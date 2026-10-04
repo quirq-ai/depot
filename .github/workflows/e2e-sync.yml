@@ -1,0 +1,73 @@
+# End to end: what a new contributor runs on a fresh machine. `qq fetch` clones each product repo
+# at main and runs `qq sync` in it from this depot checkout, so the toolchains come from public
+# ghcr anonymously, exactly as on a laptop. Then each pinned toolchain must run at its pinned
+# version, and a second `qq sync` must reuse the sealed store entries.
+# Runs nightly, on demand, and on PRs that change this file. The products are cloned at main, not
+# pinned, so a red nightly can come from a product change as well as from qq or a toolchain.
+# There is no setup-python on purpose: `bin/qq` runs on the image's own python3, as on a fresh machine.
+# TODO(suraj): the per-toolchain smoke checks below name tools, which a core repo avoids (AGENTS.md);
+# move them to toolchains or replace them with a tool-blind check once one exists.
+name: e2e-sync
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+  pull_request:
+    paths: [.github/workflows/e2e-sync.yml]
+permissions:
+  contents: read
+concurrency:
+  group: e2e-sync-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  sync:
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [xo-space, innernet]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash  # -eo pipefail
+    steps:
+      # The runner context is not available in job-level env, so these are set here.
+      - name: paths
+        run: |
+          echo "QQ_HOME=$RUNNER_TEMP/qq" >> "$GITHUB_ENV"
+          echo "PRODUCT=$RUNNER_TEMP/${{ matrix.repo }}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: qq fetch (clone at main, then qq sync)
+        run: bin/qq fetch "https://github.com/quirq-ai/${{ matrix.repo }}" "$PRODUCT"
+      - name: the pinned toolchains run
+        working-directory: ${{ env.PRODUCT }}
+        run: |
+          set -x
+          git log --oneline -1
+          ls -l .qq/toolchains
+          # The manifest is read only through qqsync, here the one the launcher installed.
+          qqsync=$(ls "$QQ_HOME"/launchers/*/bin/qqsync | head -n 1)
+          pinned() { "$qqsync" show | python3 -c 'import json, sys; print(json.load(sys.stdin)["toolchains"][sys.argv[1]]["version"])' "$1"; }
+          case "${{ matrix.repo }}" in
+            xo-space)
+              want=$(pinned python)
+              test -n "$want"
+              .qq/toolchains/python/bin/python3 -c "import sys, ssl; v = '.'.join(map(str, sys.version_info[:3])); print(v, ssl.OPENSSL_VERSION); assert v == '$want', v"
+              ;;
+            innernet)
+              want=$(pinned node)
+              test -n "$want"
+              test "$(.qq/toolchains/node/bin/node --version)" = "v$want"
+              # The pnpm the node toolchain bundles (toolchains/node/toolchain.toml).
+              test "$(PATH="$PWD/.qq/toolchains/node/bin:$PATH" pnpm --version)" = 11.28.2
+              ;;
+          esac
+      # With the network cut, a second sync can only pass by reusing the checked store entries.
+      - name: a second qq sync reuses the sealed store, offline
+        working-directory: ${{ env.PRODUCT }}
+        run: |
+          dead=http://127.0.0.1:9
+          env HTTPS_PROXY=$dead https_proxy=$dead HTTP_PROXY=$dead http_proxy=$dead NO_PROXY= no_proxy= \
+            "$GITHUB_WORKSPACE/bin/qq" sync
