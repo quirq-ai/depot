@@ -57,7 +57,13 @@ def handle(args):
         case ["auth", "token"]:
             print(s["token"])
         case ["repo", "view"]:
-            print(s["default_branch"] if "defaultBranchRef" in args else s["repo"])
+            if "defaultBranchRef" in args:
+                print(s["default_branch"])
+            elif args[2].startswith("-") or args[2].lower() == s["repo"].lower():
+                print(s["repo"])   # GitHub's spelling, whatever case was asked for
+            else:
+                print(f"GraphQL: Could not resolve to a Repository with the name '{args[2]}'.", file=sys.stderr)
+                return 1
         case ["pr", "list"]:
             found = [pr_json(s, p) for p in prs.values()
                      if p["headRefName"] == opt(args, "--head") and p["state"] == "OPEN"]

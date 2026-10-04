@@ -38,9 +38,10 @@ def _change(repo: str, pr: dict) -> Change:
 
 
 def repo(given: str | None, cwd=None) -> str:
-    if given:
-        return given
-    return _run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], cwd).strip()
+    """The canonical OWNER/NAME, as GitHub spells it. GitHub matches names case-insensitively, so
+    the gate must never see a user's spelling (quirq-ai/Demo would miss repos.toml's demo)."""
+    cmd = ["gh", "repo", "view", *([given] if given else []), "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
+    return _run(cmd, cwd).strip()
 
 
 def default_branch(repo: str) -> str:

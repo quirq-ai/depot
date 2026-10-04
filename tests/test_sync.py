@@ -272,3 +272,42 @@ def test_registry_token_is_not_sent_on_redirects(monkeypatch):
     (request,) = seen
     assert request.unredirected_hdrs["Authorization"] == "Bearer tok"
     assert "Authorization" not in request.headers
+
+
+@pytest.mark.parametrize("committed", [".qq", ".qq/toolchains"])
+def test_a_committed_symlink_cannot_point_sync_outside_the_repo(tmp_path, monkeypatch, capsys, committed):
+    archive = tmp_path / "hello.tar.gz"
+    archive.write_bytes(tool_tarball())
+    repo = product(tmp_path, f'[toolchains.hello]\nsource = "{archive.as_uri()}"\n'
+                             f'digest = "{sha256(archive.read_bytes())}"\n')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    unrelated = elsewhere / "unrelated"
+    unrelated.symlink_to(tmp_path)
+    (repo / committed).parent.mkdir(parents=True, exist_ok=True)
+    (repo / committed).symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.chdir(repo)
+    assert cli.main(["sync"]) == 1
+    assert "is a symlink" in capsys.readouterr().err
+    assert sorted(p.name for p in elsewhere.iterdir()) == ["unrelated"]   # nothing written, nothing deleted
+
+
+def test_sync_json_is_not_written_through_a_symlink(tmp_path, monkeypatch):
+    repo = product(tmp_path, "")
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    (repo / ".qq").mkdir()
+    (repo / ".qq" / "sync.json").symlink_to(victim)
+    monkeypatch.chdir(repo)
+    assert cli.main(["sync"]) == 1
+    assert victim.read_text() == "keep\n"
+
+
+def test_sync_removes_only_links_into_the_store(tmp_path, monkeypatch):
+    repo = product(tmp_path, "")
+    mine = repo / ".qq" / "toolchains" / "handmade"
+    mine.parent.mkdir(parents=True)
+    mine.symlink_to(tmp_path)   # not a pin and not into the store: someone else's link
+    monkeypatch.chdir(repo)
+    assert cli.main(["sync"]) == 0
+    assert mine.is_symlink()

@@ -115,8 +115,9 @@ once. A refused change is not queued, and a change the queue drops is reported a
 
 qq does not decide what must pass. It runs [gate](https://github.com/quirq-ai/gate)'s `qqgate`
 at the commit `src/qqdepot/gate.py` pins, in its own environment under `$QQ_HOME/gate`, with
-infra-config at the commit the gate pins. A repo infra-config does not list is reported as
-ungated, from the backend's own checks. On GitHub the commands are thin wrappers over `gh`
+infra-config at the commit the gate pins. A repo infra-config does not list (qqgate's exit 3) is
+reported as ungated and judged strictly from the backend's own checks: at least one check, every
+check a success (skipped and neutral are refusals), and no run of the commit still going. On GitHub the commands are thin wrappers over `gh`
 (signed in with `gh auth login`); backend code sits in `src/qqdepot/backends/<backend>.py`,
 picked by `--backend` or `$QQ_BACKEND`.
 

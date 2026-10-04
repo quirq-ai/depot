@@ -24,15 +24,15 @@ from qqdepot.pin import qq_home
 
 # TODO(expert): let rollers move this pin, with the qqsync and qqrecipes pins in pyproject.toml.
 GATE_SOURCE = "https://github.com/quirq-ai/gate"
-GATE_COMMIT = "eba7c1cd6b448f2cbf098f1cb8e964c0bbaef75a"   # V0-GAT-01 (#2)
+GATE_COMMIT = "3b4250c05b6d629e048c2f760beb9ab4d3e2c251"   # main after #7: exit 3 for "not onboarded"
 # Override for development and tests: a qqgate executable and an infra-config checkout.
 GATE_ENV, CONFIG_ENV = "QQ_GATE", "QQ_GATE_CONFIG"
 
 # Check states that are not a result yet. Any other state that is not a pass is a refusal.
 RUNNING = frozenset({"queued", "in_progress", "waiting", "requested", "pending", "expected"})
-UNGATED_PASSING = frozenset({"success", "neutral", "skipped"})   # GitHub's own rule
-UNGATED_MARK = "is not an onboarded repo"                          # qqgate's message (required.py)
-UNGATED_EXIT = 3   # qqgate from 5ba0d58 on; the message alone covers the pinned eba7c1c
+# qqgate's exit code for a repo infra-config does not list (gate #7). Only this structured answer
+# means "ungated": an error's text never does, so a gate failure can never open the weaker rule.
+UNGATED_EXIT = 3
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -108,7 +108,7 @@ def _qqgate(args: list[str], token: str | None = None) -> tuple[int, dict | None
     except OSError as e:
         raise ChangeError(f"cannot run the gate ({exe}): {e}") from None
     data = None
-    if p.returncode in (0, 1) or (p.returncode == UNGATED_EXIT and p.stdout.strip()):
+    if p.returncode in (0, 1, UNGATED_EXIT):
         try:
             data = json.loads(p.stdout)
         except json.JSONDecodeError as e:
@@ -117,7 +117,8 @@ def _qqgate(args: list[str], token: str | None = None) -> tuple[int, dict | None
 
 
 def gated_name(repo: str) -> str:
-    """The gate names repos as infra-config repos.toml does: the repository's own name.
+    """The gate names repos as infra-config repos.toml does: the repository's own name. `repo` is
+    the backend's canonical OWNER/NAME (backend.repo), never the spelling a user typed.
     TODO(expert): match on repos.toml `source` once two owners share a repo name."""
     return repo.rsplit("/", 1)[-1]
 
@@ -127,7 +128,7 @@ def required(repo: str) -> dict | None:
     rc, data, err = _qqgate(["required", "--repo", gated_name(repo)])
     if rc == 0:
         return data
-    if rc == UNGATED_EXIT or UNGATED_MARK in err:
+    if rc == UNGATED_EXIT and data == {"repo": gated_name(repo), "onboarded": False}:
         return None
     raise ChangeError(f"the gate could not compute {repo}'s required checks: {err}")
 
@@ -140,10 +141,13 @@ def classify_gated(v: dict) -> str:
     return "pending"   # only checks still running or not reported yet
 
 
-def classify_ungated(checks: dict[str, str]) -> str:
-    if any(s not in RUNNING and s not in UNGATED_PASSING for s in checks.values()):
+def classify_ungated(checks: dict[str, str], runs: dict) -> str:
+    """No policy covers the repo, so be strict: every check finished with success, at least one
+    check, and no run of the commit still going. Skipped and neutral are refusals here."""
+    if any(s not in RUNNING and s != "success" for s in checks.values()):
         return "refused"
-    if not checks or any(s in RUNNING for s in checks.values()):
+    if not checks or any(s in RUNNING for s in checks.values()) \
+            or any(status != "completed" for status in runs.values()):
         return "pending"
     return "pass"
 
@@ -152,9 +156,9 @@ def verdict(repo: str, sha: str, backend) -> dict:
     """{"result": pass|refused|pending, "gated": bool, ...} for one commit."""
     token = backend.token()
     rc, data, err = _qqgate(["verdict", "--repo", gated_name(repo), "--sha", sha], token)
-    if data is not None and data.get("onboarded") is not False:
+    if rc in (0, 1):
         return {"result": classify_gated(data), "gated": True, "sha": sha, **data}
-    if rc == UNGATED_EXIT or UNGATED_MARK in err:
-        checks = backend.checks(repo, sha)
-        return {"result": classify_ungated(checks), "gated": False, "sha": sha, "checks": checks}
+    if rc == UNGATED_EXIT and data == {"repo": gated_name(repo), "onboarded": False}:
+        checks, runs = backend.checks(repo, sha), backend.runs(repo, sha)
+        return {"result": classify_ungated(checks, runs), "gated": False, "sha": sha, "checks": checks}
     raise ChangeError(f"the gate could not decide {repo}@{sha[:12]}: {err}")
