@@ -21,7 +21,7 @@ contributor needs (`gclient`, `git cl upload`, `git cl try`, `git cl land`).
 ## Install
 
 Clone this repo once and put its `bin` directory on `PATH`, as with depot_tools. You need
-`git` and `python3` 3.11 or newer with its `venv` module.
+`git` and `python3` 3.11.4 or newer with its `venv` module.
 
 ```sh
 git clone https://github.com/quirq-ai/depot ~/depot
@@ -59,6 +59,18 @@ digest fixes the exact bytes; a version alone trusts the depot tag `v<version>`.
 TODO(expert): once depot publishes releases (release repo), pin by `sha256` archive by default and
 let the bootstrap update its own checkout.
 
+## Build and test like CI
+
+```sh
+qq build [TARGET ...]     # fetch and build the targets (default all)
+qq test [TARGET ...]      # fetch, build and test them
+```
+
+Both hand the manifest to `recipes`, the same planner and runner CI uses, so a local run and a CI
+run of one commit execute the same adapter actions and leave the same JUnit XML, logs and
+`results.json` under `<repo>/.qq/out`. Toolchains come from `<repo>/.qq/toolchains/<name>`, where
+`qq sync` unpacks them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
+
 ## Subcommands from other repos
 
 A package adds a `qq` subcommand with an entry point in the `qq.commands` group naming a function
@@ -72,15 +84,15 @@ python -m pip install -e ".[test]"
 python -m pytest -q
 ```
 
-Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11 or newer.
+Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or newer.
 
 ## v0 status
 
 | Item | What | PR | State |
 |---|---|---|---|
-| V0-DEP-01 | `qq` skeleton with version pinning | #2 | in review |
+| V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | | waiting on V0-SYN-02, V0-TCH-01, V0-TCH-02 |
-| V0-DEP-03 | `qq build` and `qq test` | | waiting on V0-REC-01 |
+| V0-DEP-03 | `qq build` and `qq test` | #3 | in review; parity shown in-process with a test adapter (`tests/test_build.py`). The real local-vs-CI comparison waits on recipes' adapters (V0-REC-02/03) and the generated CI workflow |
 | V0-DEP-04 | `qq upload`, `try`, `land`, `status` | | waiting on V0-GAT-01 |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.

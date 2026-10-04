@@ -19,3 +19,10 @@ jobs:
           python-version: "3.14"
       - run: python -m pip install --quiet -e ".[test]"
       - run: python -m pytest -q -p no:cacheprovider
+      # sync's "no other parser" check: manifests are read only through qqsync.
+      # Its own environment, so the guard's sync commit can differ from the library pins.
+      - name: no second manifest parser
+        run: |
+          python -m venv "$RUNNER_TEMP/guard"
+          "$RUNNER_TEMP/guard/bin/pip" install --quiet "qqsync @ git+https://github.com/quirq-ai/sync@8f624f4a7fe3abdab2c7b83376f1ae7772073fd4"  # TODO(expert): let rollers move this pin.
+          "$RUNNER_TEMP/guard/bin/qqsync" guard .

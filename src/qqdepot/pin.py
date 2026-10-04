@@ -128,6 +128,7 @@ def requirement(pin: Pin, scratch: Path) -> str:
 
 def installed_version(qq: Path) -> str:
     env = {**os.environ, PINNED_ENV: "1"}
+    env.pop("PYTHONPATH", None)
     out = _run([str(qq), "--version"], env=env).stdout.strip()
     return out.removeprefix("qq ")
 
@@ -173,4 +174,6 @@ def dispatch(argv: list[str]) -> None:
     if pin is None or is_self(pin):
         return
     qq = ensure(pin)
-    os.execve(qq, [str(qq), *argv], {**os.environ, PINNED_ENV: "1"})
+    env = {**os.environ, PINNED_ENV: "1"}
+    env.pop("PYTHONPATH", None)  # the pinned qq runs its own code, never code shadowing it
+    os.execve(qq, [str(qq), *argv], env)
