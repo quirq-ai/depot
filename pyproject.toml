@@ -9,7 +9,10 @@ description = "qq, the quirq infra command line: self-updating and version-pinne
 readme = "README.md"
 requires-python = ">=3.11"
 # Other qq repos by pinned commit, never by copying code. TODO(expert): let rollers move this pin.
-dependencies = ["qqsync @ git+https://github.com/quirq-ai/sync@5abac76af194a40961074ce75432f4fdb79fe951"]
+dependencies = [
+    "qqsync @ git+https://github.com/quirq-ai/sync@5abac76af194a40961074ce75432f4fdb79fe951",
+    "qqrecipes @ git+https://github.com/quirq-ai/recipes@efc4ab52c7d262b5ddece293fcd66aa0d11bdfa4",
+]
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1"]
