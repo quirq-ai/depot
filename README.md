@@ -104,10 +104,12 @@ qq build [TARGET ...]     # fetch and build the targets (default all)
 qq test [TARGET ...]      # fetch, build and test them
 ```
 
-Both hand the manifest to `recipes`, the same planner and runner CI uses, so a local run and a CI
-run of one commit execute the same adapter actions and leave the same JUnit XML, logs and
-`results.json` under `<repo>/.qq/out`. Toolchains come from `<repo>/.qq/toolchains/<name>`, where
-`qq sync` unpacks them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
+Both hand the manifest to `recipes`, qq's planner and runner, which leave JUnit XML, logs and
+`results.json` under `<repo>/.qq/out`. Product CI does not run recipes yet: it still runs the
+stand-in commands of its hand-written presubmit until infra-config generates the workflow
+(V0-CFG-02), so a local run and a CI run of one commit can differ. Toolchains come from
+`<repo>/.qq/toolchains/<name>`, where `qq sync` unpacks them, or `--toolchain NAME=ROOT`; any other
+toolchain is the one on `PATH`.
 
 ## Send a change through the gate
 
