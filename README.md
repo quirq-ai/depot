@@ -105,11 +105,12 @@ qq test [TARGET ...]      # fetch, build and test them
 ```
 
 Both hand the manifest to `recipes`, qq's planner and runner, which leave JUnit XML, logs and
-`results.json` under `<repo>/.qq/out`. Product CI does not run recipes yet: it still runs the
-stand-in commands of its hand-written presubmit until infra-config generates the workflow
-(V0-CFG-02), so a local run and a CI run of one commit can differ. Toolchains come from
-`<repo>/.qq/toolchains/<name>`, where `qq sync` unpacks them, or `--toolchain NAME=ROOT`; any other
-toolchain is the one on `PATH`.
+`results.json` under `<repo>/.qq/out` (or `--out DIR`). Product CI does not run recipes yet: the
+workflows infra-config generates (`qq-<repo>-presubmit.yml` and `-postsubmit.yml`) still run the
+stand-in `interim` commands from infra-config's `kinds.toml`, on toolchains from GitHub's setup
+actions. A local run and a CI run of one commit can therefore differ until those steps switch to
+recipes (V0-DEP-03). Toolchains come from `<repo>/.qq/toolchains/<name>`, where `qq sync` unpacks
+them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
 
 ## Send a change through the gate
 
@@ -160,8 +161,8 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 |---|---|---|---|
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | #4 | merged; a fresh clone builds after `qq sync` alone in `tests/test_sync.py`. The `e2e-sync` workflow (#17) runs `qq fetch` (clone at main, then `qq sync`) on xo-space and innernet nightly and on demand, from public ghcr with no credentials |
-| V0-DEP-03 | `qq build` and `qq test` | #3, #5 | merged; presubmit `parity` runs `qq test` and `qqrecipes execute` on xo-space and innernet on separate runners and compares their JUnit. Manifests are sync's onboarding fixtures until onboarding lands the real ones |
-| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the delivered workflows (xo-space #211, innernet #37) and the rulesets (V0-ORG-03) |
+| V0-DEP-03 | `qq build` and `qq test` | #3, #5 | merged; presubmit `parity` runs `qq test` and `qqrecipes execute` on xo-space and innernet on separate runners and compares their JUnit. Parity still reads sync's fixture manifests, not the repos' own `infra/repo.toml`. Not done: product CI does not run recipes yet (see Build and test like CI) |
+| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the rulesets (V0-ORG-03) |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
 
