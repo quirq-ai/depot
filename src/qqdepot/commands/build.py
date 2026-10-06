@@ -1,8 +1,9 @@
-"""qq build and qq test: run the same adapter actions as CI, here.
+"""qq build and qq test: run a repo's targets here through quirq-ai/recipes.
 
-Both hand the repo's manifest to quirq-ai/recipes, the same planner and runner CI uses, so a
-local run and a CI run of one commit execute the same actions and leave the same JUnit XML
-under <repo>/.qq/out. qq adds only the repo root and the toolchains `qq sync` unpacked.
+Both hand the repo's manifest to recipes, qq's planner and runner, which leave JUnit XML under
+<repo>/.qq/out. qq adds only the repo root and the toolchains `qq sync` unpacked. Product CI
+does not run recipes yet (its generated workflows still run infra-config's interim commands), so
+local and CI results can differ until they do (V0-DEP-03).
 """
 from __future__ import annotations
 
@@ -27,7 +28,8 @@ def toolchain_args(root: Path) -> list[str]:
     """--toolchain NAME=ROOT for every toolchain `qq sync` unpacked; others come from PATH.
 
     TODO(expert): CI must use the same pinned toolchains (and recipes commit) for local and CI
-    results to match; the generated CI workflow (V0-CFG-02, test-pipelines) should run qq sync.
+    results to match; infra-config's generated workflows should switch from interim commands to
+    recipes and run qq sync (V0-DEP-03).
     """
     synced = root / TOOLCHAINS
     if not synced.is_dir():
@@ -58,8 +60,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def register(sub) -> None:
-    for goal, help_text in (("build", "build targets here, as CI does"),
-                            ("test", "build and test targets here, as CI does")):
+    for goal, help_text in (("build", "build targets here with recipes"),
+                            ("test", "build and test targets here with recipes")):
         p = sub.add_parser(goal, help=help_text,
                            description=f"{help_text}. Results land in <repo>/.qq/out (JUnit XML,"
                                        " logs and results.json).")
