@@ -112,6 +112,35 @@ actions. A local run and a CI run of one commit can therefore differ until those
 recipes (V0-DEP-03). Toolchains come from `<repo>/.qq/toolchains/<name>`, where `qq sync` unpacks
 them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
 
+## Run a command with the repo's toolchains
+
+```sh
+qq run "make test"                 # a command line, run with /bin/sh
+qq run make test                   # several words: the program runs directly, no shell
+qq run --save check "make test"    # save it as infra/commands/check.sh
+qq run check [ARG ...]             # run a saved command; ARGs are its "$@"
+qq run --list                      # list saved commands; --show NAME prints one
+```
+
+`qq run` runs from the repo root. The `bin` directory of each toolchain `qq sync` linked under
+`<repo>/.qq/toolchains` comes first on `PATH`, so the command uses the versions the manifest pins
+rather than whatever is installed. Only links into this machine's store count: a toolchain
+directory committed to the repo never lands on `PATH`. A pinned toolchain that is not synced is
+named on stderr and taken from `PATH`. Toolchains are published for Linux only so far, so on a Mac
+`qq run` runs the command with your own tools and says which pins it could not use. qq exits with
+the command's exit code (128 + N when signal N ends it).
+
+Saved commands are POSIX shell scripts at `infra/commands/<name>.sh`, committed so teammates and
+agents run the same thing. `--save` writes one (`--force` replaces it); you can also write or edit
+one by hand. One argument is saved as typed; several are quoted so each stays one word. A name is
+lowercase letters, digits, `-` and `_`, so it can never be a path or shell syntax, and arguments
+reach the script as `"$@"`, never as shell code. When a name matches a saved command, that command
+runs and qq says so on stderr; otherwise the word runs as a command.
+
+A saved command is code in the repo, like any script there. qq runs one only when you name it,
+never from `qq sync`, `qq build` or `qq test`; read it with `qq run --show NAME` before running one
+from a repo you do not trust. CI does not run saved commands yet.
+
 ## Send a change through the gate
 
 ```sh
