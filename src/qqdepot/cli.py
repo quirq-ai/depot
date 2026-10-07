@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     except PinError as e:
         print(f"qq: {e}", file=sys.stderr)
         return 2
+    if argv[:1] == ["run"]:   # parsed on its own: its usage errors must not exit 2 like a command's
+        return run.main(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "run", None) is None:

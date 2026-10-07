@@ -10,7 +10,9 @@
 
 Every command runs from the repo root. The bin directory of each toolchain `qq sync` linked under
 <repo>/.qq/toolchains comes first on PATH, so the command runs the versions the repo pins. qq then
-becomes the command (exec), so its exit code and signals are the command's own.
+becomes the command (exec), so its exit code and signals are the command's own. When qq itself
+fails (bad usage, no repo, a broken saved command) it exits 125; a command that cannot start
+gives 127 (not found) or 126 (not runnable), as a shell does.
 
 A saved command is code in the repo, like any script there: qq runs one only when you name it.
 """
@@ -35,10 +37,13 @@ COMMANDS = Path("infra/commands")
 # A name is a file name and a word on qq's command line, never a path or shell syntax.
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 SHELL = "/bin/sh"
+QQ_FAILED = 125   # qq's own failure, as env and timeout use it; 126 and 127 as a shell does
+# A script that reads its arguments: "$@", $*, $#, $1-$9, or their ${...} forms.
+USES_ARGS = re.compile(r"\$\{?[@*#1-9]")
 HEADER = ("#!/bin/sh\n"
           "# Saved with `qq run --save {name}`; run it with `qq run {name} [ARG ...]`.\n"
           "# It runs from the repo root with the repo's pinned toolchains first on PATH;\n"
-          "# arguments after the name are \"$@\".\n")
+          "# arguments given after the name reach it as \"$@\".\n")
 
 
 class RunError(Exception):
@@ -120,8 +125,9 @@ def toolchain_bins(root: Path) -> tuple[list[str], list[str]]:
 def environment(root: Path) -> dict[str, str]:
     bins, missing = toolchain_bins(root)
     if missing:
-        print(f"qq: not synced here: {', '.join(missing)}; using PATH for them. Run qq sync"
-              " (toolchains are published for Linux only so far)", file=sys.stderr)
+        note = "" if sys.platform == "linux" else " (toolchains are published for Linux only so far)"
+        print(f"qq: not synced here: {', '.join(missing)}; using PATH for them. Run qq sync{note}",
+              file=sys.stderr)
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join([*bins, env.get("PATH") or os.defpath])
     env["PWD"] = str(root)
@@ -137,7 +143,11 @@ def execute(argv: list[str], root: Path, env: dict[str, str]) -> int:
         os.chdir(root)
         os.execvpe(argv[0], argv, env)
     except FileNotFoundError:
-        print(f"qq: {argv[0]}: command not found", file=sys.stderr)
+        hint = ""
+        if any(c.isspace() for c in argv[0]):
+            hint = ("; a command line goes in one quoted argument with nothing after it,"
+                    f" e.g. qq run {shlex.quote(' '.join(argv))}")
+        print(f"qq: {argv[0]}: command not found{hint}", file=sys.stderr)
         return 127
     except OSError as e:
         print(f"qq: {argv[0]}: cannot run it: {e.strerror}", file=sys.stderr)
@@ -148,10 +158,15 @@ def save(root: Path, name: str, words: list[str], force: bool) -> Path:
     check_name(name)
     if not words:
         raise RunError(f"nothing to save: qq run --save {name} COMMAND")
-    # One argument is a command line, kept as typed; several are quoted so each stays one word.
-    line = words[0] if len(words) == 1 else shlex.join(words)
+    # One argument is a command line, kept as typed. Several are quoted so each stays one word,
+    # and the arguments given when it runs are passed on after them.
+    line = words[0] if len(words) == 1 else shlex.join(words) + ' "$@"'
     if not line.strip():
         raise RunError(f"nothing to save: qq run --save {name} COMMAND")
+    try:
+        line.encode()
+    except UnicodeEncodeError:
+        raise RunError("the command is not valid UTF-8; saved commands are UTF-8 text") from None
     directory = _commands_dir(root, make=True)
     path = directory / f"{name}.sh"
     if path.is_symlink() or (path.exists() and not force):
@@ -174,11 +189,27 @@ def _umask() -> int:
     return mask
 
 
+def visible(text: str, keep: str = "") -> str:
+    """`text` with control characters (terminal escapes, carriage returns) written as \\xNN, so
+    what is shown is what runs. Characters in `keep` stay as they are."""
+    return "".join(c if c.isprintable() or c in keep else f"\\x{ord(c):02x}" if ord(c) < 0x100
+                   else f"\\u{ord(c):04x}" for c in text)
+
+
+def _read(path: Path) -> str:
+    return path.read_bytes().decode("utf-8", errors="backslashreplace")
+
+
+def _reads_arguments(script: str) -> bool:
+    """True when a line of the script other than a comment reads its arguments."""
+    return any(USES_ARGS.search(line) for line in script.splitlines() if not line.lstrip().startswith("#"))
+
+
 def _summary(path: Path) -> str:
-    """The script's first command line, with control characters (terminal escapes) shown as '?'."""
-    for line in path.read_text(errors="replace").splitlines():
+    """The script's first command line, shown visibly."""
+    for line in _read(path).split("\n"):
         if line.strip() and not line.lstrip().startswith("#"):
-            return "".join(c if c.isprintable() else "?" for c in line.strip())
+            return visible(line.strip())
     return ""
 
 
@@ -186,7 +217,7 @@ def run_command(args: argparse.Namespace) -> int:
     root = repo_root(Path.cwd())
     if root is None:
         print(f"qq: no {MANIFEST} here or above {Path.cwd()}; run qq run inside a repo", file=sys.stderr)
-        return 2
+        return QQ_FAILED
     literal = args.words[:1] == ["--"]
     words = args.words[1:] if literal else args.words
     try:
@@ -202,16 +233,23 @@ def run_command(args: argparse.Namespace) -> int:
             path = saved_path(root, args.show)
             if path is None:
                 raise RunError(f"no saved command {args.show!r} (qq run --list shows them)")
-            sys.stdout.write(path.read_text(errors="replace"))
+            sys.stdout.write(visible(_read(path), keep="\n\t"))
             return 0
         if args.save is not None:
             path = save(root, args.save, words, args.force)
             print(f"qq: saved {path.relative_to(root)}; commit it to share it, run it with qq run {args.save}")
             return 0
-        if not words:
+        if not words or not words[0].strip():
             raise RunError('nothing to run: qq run "COMMAND", qq run NAME, or qq run --list')
-        path = saved_path(root, words[0]) if NAME.fullmatch(words[0]) and not literal else None
+        try:
+            path = saved_path(root, words[0]) if NAME.fullmatch(words[0]) and not literal else None
+        except RunError as e:
+            raise RunError(f"{e} (put -- first to run a program without looking up saved commands)") from None
         if path is not None:
+            if words[1:] and not _reads_arguments(_read(path)):
+                raise RunError(f"saved command {words[0]} never reads its arguments (\"$@\"), so"
+                               f" {shlex.join(words[1:])} would be dropped; add \"$@\" where they go in"
+                               f" {path.relative_to(root)}")
             print(f"qq: running saved command {words[0]} ({path.relative_to(root)})", file=sys.stderr)
             argv = [SHELL, str(path), *words[1:]]
         elif len(words) == 1:
@@ -221,13 +259,19 @@ def run_command(args: argparse.Namespace) -> int:
         return execute(argv, root, environment(root))
     except (RunError, OSError) as e:
         print(f"qq: {e}", file=sys.stderr)
-        return 2
+        return QQ_FAILED
 
 
-def register(sub) -> None:
-    p = sub.add_parser("run", help="run a command, or a saved one, with the repo's pinned toolchains",
-                       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-                       allow_abbrev=False)
+class _Parser(argparse.ArgumentParser):
+    """Usage errors exit QQ_FAILED, so they never look like the command's own exit code."""
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        hint = " (put -- before a program whose name starts with -)" if "unrecognized" in message else ""
+        self.exit(QQ_FAILED, f"{self.prog}: error: {message}{hint}\n")
+
+
+def _arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group = p.add_mutually_exclusive_group()
     group.add_argument("--save", metavar="NAME", help="save COMMAND as infra/commands/NAME.sh")
     group.add_argument("--list", action="store_true", help="list the saved commands")
@@ -236,3 +280,17 @@ def register(sub) -> None:
     p.add_argument("words", nargs=argparse.REMAINDER, metavar="COMMAND",
                    help="a command line, a program and its arguments, or a saved command's name")
     p.set_defaults(run=run_command)
+    return p
+
+
+def main(argv: list[str]) -> int:
+    """`qq run ARGS`, parsed on its own so that qq's usage errors exit QQ_FAILED."""
+    parser = _arguments(_Parser(prog="qq run", description=__doc__, allow_abbrev=False,
+                                formatter_class=argparse.RawDescriptionHelpFormatter))
+    return run_command(parser.parse_args(argv))
+
+
+def register(sub) -> None:
+    _arguments(sub.add_parser("run", help="run a command, or a saved one, with the repo's pinned toolchains",
+                              description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                              allow_abbrev=False))

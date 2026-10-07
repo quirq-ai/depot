@@ -115,12 +115,12 @@ them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
 ## Run a command with the repo's toolchains
 
 ```sh
-qq run "./scripts/check --fast"       # a command line, run with /bin/sh
-qq run --save check "./scripts/check" # save it as infra/commands/check.sh
-qq run check [ARG ...]                # run a saved command; ARGs are its "$@"
-qq run PROGRAM [ARG ...]              # several words: PROGRAM runs directly, no shell
-qq run -- PROGRAM [ARG ...]           # the same, even when a saved command is named PROGRAM
-qq run --list                         # list saved commands; --show NAME prints one
+qq run "./scripts/check --fast"            # a command line, run with /bin/sh
+qq run --save check ./scripts/check --all  # save it as infra/commands/check.sh
+qq run check --fast                        # runs ./scripts/check --all --fast
+qq run PROGRAM [ARG ...]                   # several words: PROGRAM runs directly, no shell
+qq run -- PROGRAM [ARG ...]                # the same, even when a saved command is named PROGRAM
+qq run --list                              # list saved commands; --show NAME prints one
 ```
 
 `qq run` runs from the repo root. The `bin` directory of each toolchain `qq sync` linked under
@@ -130,21 +130,33 @@ for the digest pinned now: after a pin moves, the old one is not used, and a too
 committed to the repo never lands on `PATH`. A pinned toolchain that is not synced at its pin is
 named on stderr and taken from `PATH`; run `qq sync`. Toolchains are published for Linux only so
 far, so on a Mac `qq run` runs the command with your own tools and names the pins it could not
-use. qq then becomes the command (exec), so its exit code, signals and terminal are the command's
-own. It runs in the foreground, like `qq build` and `qq test`; it is for local commands, not for
-handing long work to CI.
+use. CI does not use these pins yet (it installs its tools with GitHub's setup actions), so a
+patch version can differ between `qq run` and CI.
+
+qq then becomes the command (exec), so its exit code, signals and terminal are the command's own.
+When qq itself fails (bad usage, no repo, a broken saved command) it exits 125, so its errors never
+look like the command's; a command that cannot start gives 127 (not found) or 126 (not runnable),
+as a shell does. It runs in the foreground, like `qq build` and `qq test`; it is for local
+commands, not for handing long work to CI.
 
 Saved commands are POSIX shell scripts at `infra/commands/<name>.sh`, committed so teammates and
 agents run the same thing. `--save` writes one (`--force` replaces it); you can also write or edit
-one by hand. One argument is saved as typed; several are quoted so each stays one word, and
-arguments given when it runs reach it only through `"$@"`. A name is lowercase letters, digits,
-`-` and `_`, so it can never be a path or shell syntax, and arguments are never read as shell
-code. When the first word is a saved command's name, that command runs and qq says so on stderr;
-put `--` first to run a program of the same name instead.
+one by hand. Saved from several words, each stays one word and the arguments given when it runs
+are passed on after them (`"$@"`). Saved from one argument, the command line is kept as typed;
+add `"$@"` where arguments should go, since qq refuses to run a saved command with arguments it
+never reads rather than drop them. A name is lowercase letters, digits, `-` and `_`, so it can
+never be a path or shell syntax, and arguments are never read as shell code. When the first word
+is a saved command's name, that command runs and qq says so on stderr; put `--` first to run a
+program of the same name instead.
 
 A saved command is code in the repo, like any script there. qq runs one only when you name it,
-never from `qq sync`, `qq build` or `qq test`; read it with `qq run --show NAME` before running one
-from a repo you do not trust. CI does not run saved commands yet.
+never from `qq sync`, `qq build` or `qq test`. `qq run --show NAME` prints it with control
+characters written as `\xNN`, so what you read is what runs; read it before running one from a
+repo you do not trust. CI does not run saved commands yet.
+
+A repo that pins `[qq] version = "0.1.0"` (xo-space and innernet do) runs the `qq` of your depot
+checkout, since that is the version it reports, so it has `qq run` once your checkout includes
+this change. A repo that pins qq by digest gets it when its pin moves to a commit that has it.
 
 ## Send a change through the gate
 
