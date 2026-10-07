@@ -51,8 +51,8 @@ into its own environment under `$QQ_HOME` (default `~/.cache/qq/versions/<versio
 that it reports the pinned version; later runs reuse it. When a roll moves the pin, the next `qq`
 installs the new version by itself: that is how `qq` updates. depot has no release tag yet, so no
 `v0.1.0` tag exists to install; a pin of version `0.1.0` with no `source` or `digest` runs your depot
-checkout, which reports `0.1.0`. Outside a repo, or in one without a
-`[qq]` table, `qq` runs the version of your depot checkout.
+checkout, which reports `0.1.0`. Outside a repo, or in one without a `[qq]` table, `qq` runs the
+version of your depot checkout.
 
 Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/depot, and
 release archives under it) or from a source you list in `$QQ_TRUSTED_SOURCES`, so a pull request
@@ -231,7 +231,7 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | #4 | merged; a fresh clone builds after `qq sync` alone in `tests/test_sync.py`. The `e2e-sync` workflow (#17) runs `qq fetch` (clone at main, then `qq sync`) on xo-space and innernet nightly and on demand, from public ghcr with no credentials |
 | V0-DEP-03 | `qq build` and `qq test` | #3, #5 | merged; presubmit `parity` runs `qq test` and `qqrecipes execute` on xo-space and innernet on separate runners and compares their JUnit. Parity still reads sync's fixture manifests, not the repos' own `infra/repo.toml`. Not done: product CI does not run recipes yet (see Build and test like CI) |
-| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. gate's repo rulesets (V0-ORG-03) are applied; a live `qq try` or `qq land` on xo-space or innernet is not shown here yet |
+| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. gate's repo rulesets are applied as of gate 6610664, which covered the 13 infra repos plus xo-space and innernet; gate's later settings (website onboarding, gate #25, #26) are not applied yet. A live `qq try` or `qq land` on xo-space or innernet is not shown here yet |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
 
