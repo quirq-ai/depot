@@ -3,6 +3,8 @@ import hashlib
 import io
 import os
 import stat
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -19,9 +21,15 @@ def toolchain(tmp_path: Path, message: str) -> tuple[str, str]:
         info = tarfile.TarInfo("bin/hello")
         info.size, info.mode = len(script), 0o755
         tar.addfile(info, io.BytesIO(script))
-    archive = tmp_path / "hello.tar.gz"
+    archive = tmp_path / f"hello-{hashlib.sha256(message.encode()).hexdigest()[:8]}.tar.gz"
     archive.write_bytes(buf.getvalue())
     return archive.as_uri(), "sha256:" + hashlib.sha256(buf.getvalue()).hexdigest()
+
+
+def qq(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """qq in its own process: `qq run` replaces the process with the command."""
+    return subprocess.run([sys.executable, "-m", "qqdepot.cli", *args], cwd=cwd, capture_output=True, text=True,
+                          env={**os.environ, "QQ_PINNED": "1"})
 
 
 @pytest.fixture
@@ -36,32 +44,39 @@ def repo(tmp_path, monkeypatch) -> Path:
 
 def pin_hello(root: Path, tmp_path: Path, message: str = "pinned hello") -> None:
     source, digest = toolchain(tmp_path, message)
-    with (root / "infra" / "repo.toml").open("a") as f:
-        f.write(f'[toolchains.hello]\nsource = "{source}"\ndigest = "{digest}"\n')
+    manifest = root / "infra" / "repo.toml"
+    text = manifest.read_text().split("[toolchains.hello]")[0]
+    manifest.write_text(text + f'[toolchains.hello]\nsource = "{source}"\ndigest = "{digest}"\n')
 
 
-def test_command_line_runs_from_repo_root_with_exit_code(repo, capfd):
-    assert cli.main(["run", "pwd; exit 3"]) == 3
-    assert capfd.readouterr().out.strip() == str(repo)
+def test_command_line_runs_from_repo_root_with_exit_code(repo):
+    r = qq("run", "pwd; echo $PWD; exit 3")
+    assert r.returncode == 3
+    assert r.stdout.split() == [str(repo), str(repo)]
 
 
-def test_several_words_run_without_a_shell(repo, capfd):
-    assert cli.main(["run", "printf", "%s|", "a b", "$HOME", ";", "x"]) == 0
-    assert capfd.readouterr().out == "a b|$HOME|;|x|"
+def test_several_words_run_without_a_shell(repo):
+    r = qq("run", "printf", "%s|", "a b", "$HOME", ";", "x")
+    assert (r.returncode, r.stdout) == (0, "a b|$HOME|;|x|")
 
 
-def test_double_dash_and_options_after_the_command(repo, capfd):
-    assert cli.main(["run", "--", "printf", "%s", "--list"]) == 0
-    assert capfd.readouterr().out == "--list"
+def test_double_dash_and_options_after_the_command(repo):
+    r = qq("run", "--", "printf", "%s", "--list")
+    assert (r.returncode, r.stdout) == (0, "--list")
 
 
-def test_missing_program_is_127(repo, capfd):
-    assert cli.main(["run", "no-such-program-here", "x"]) == 127
-    assert "command not found" in capfd.readouterr().err
+def test_missing_program_is_127(repo):
+    r = qq("run", "no-such-program-here", "x")
+    assert r.returncode == 127
+    assert "command not found" in r.stderr
 
 
-def test_signal_exit_code(repo):
-    assert cli.main(["run", "kill -TERM $$"]) == 128 + 15
+def test_qq_becomes_the_command(repo):
+    """Signals reach the command itself: qq is not left as a parent that dies alone."""
+    r = qq("run", "kill -TERM $$")
+    assert r.returncode == -15
+    r = qq("run", "echo $PPID")   # the shell's parent is whoever started qq
+    assert (r.returncode, r.stdout.strip()) == (0, str(os.getpid()))
 
 
 def test_outside_a_repo(tmp_path, monkeypatch, capfd):
@@ -75,7 +90,22 @@ def test_nothing_to_run(repo, capfd):
     assert "nothing to run" in capfd.readouterr().err
 
 
-def test_synced_toolchain_comes_first_on_path(repo, tmp_path, monkeypatch, capfd):
+@pytest.mark.parametrize("argv, message", [
+    (["--force", "true"], "--force only goes with --save"),
+    (["--list", "x"], "take no command"),
+    (["--show", "x", "y"], "take no command"),
+])
+def test_option_misuse(repo, capfd, argv, message):
+    assert cli.main(["run", *argv]) == 2
+    assert message in capfd.readouterr().err
+
+
+def test_no_abbreviated_options(repo, capfd):
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--sav", "x", "true"])
+
+
+def test_synced_toolchain_comes_first_on_path(repo, tmp_path, monkeypatch):
     pin_hello(repo, tmp_path)
     shadow = tmp_path / "shadow"
     shadow.mkdir()
@@ -83,28 +113,45 @@ def test_synced_toolchain_comes_first_on_path(repo, tmp_path, monkeypatch, capfd
     (shadow / "hello").chmod(0o755)
     monkeypatch.setenv("PATH", f"{shadow}:/usr/bin:/bin")
 
-    assert cli.main(["run", "hello"]) == 0
-    out, err = capfd.readouterr()
-    assert out.strip() == "from PATH"
-    assert "not synced here: hello" in err
+    for argv in (["hello"], ["--", "hello", "x"]):
+        r = qq("run", *argv)
+        assert (r.returncode, r.stdout.strip()) == (0, "from PATH")
+        assert "not synced here: hello" in r.stderr
 
     assert cli.main(["sync"]) == 0
-    capfd.readouterr()
-    assert cli.main(["run", "hello"]) == 0
-    out, err = capfd.readouterr()
-    assert out.strip() == "pinned hello"
-    assert "not synced" not in err
+    for argv in (["hello"], ["--", "hello", "x"]):
+        r = qq("run", *argv)
+        assert (r.returncode, r.stdout.strip()) == (0, "pinned hello")
+        assert "not synced" not in r.stderr
+
+    # A new pin is not run until it is synced: the old toolchain never stands in for it.
+    pin_hello(repo, tmp_path, "pinned hello v2")
+    r = qq("run", "hello")
+    assert (r.returncode, r.stdout.strip()) == (0, "from PATH")
+    assert "not synced here: hello" in r.stderr
+    assert cli.main(["sync"]) == 0
+    assert qq("run", "hello").stdout.strip() == "pinned hello v2"
 
 
-def test_committed_toolchain_dir_never_lands_on_path(repo, tmp_path, monkeypatch, capfd):
+def test_committed_toolchain_never_lands_on_path(repo, tmp_path, monkeypatch):
     pin_hello(repo, tmp_path)
     fake = repo / ".qq" / "toolchains" / "hello" / "bin"
     fake.mkdir(parents=True)
     (fake / "hello").write_text("#!/bin/sh\necho 'from the repo'\n")
     (fake / "hello").chmod(0o755)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    assert cli.main(["run", "hello"]) == 127
-    assert "not synced here: hello" in capfd.readouterr().err
+    r = qq("run", "hello")
+    assert r.returncode == 127
+    assert "not synced here: hello" in r.stderr
+
+
+def test_toolchain_link_loop_is_not_synced(repo, tmp_path):
+    pin_hello(repo, tmp_path)
+    (repo / ".qq" / "toolchains").mkdir(parents=True)
+    os.symlink("hello", repo / ".qq" / "toolchains" / "hello")
+    r = qq("run", "true")
+    assert r.returncode == 0
+    assert "not synced here: hello" in r.stderr
 
 
 def test_save_list_show_and_run(repo, capfd):
@@ -114,10 +161,9 @@ def test_save_list_show_and_run(repo, capfd):
     assert script.stat().st_mode & stat.S_IXUSR
     capfd.readouterr()
 
-    assert cli.main(["run", "greet", "you"]) == 0
-    out, err = capfd.readouterr()
-    assert out.strip() == "hi you from repo"
-    assert "running saved command greet (infra/commands/greet.sh)" in err
+    r = qq("run", "greet", "you")
+    assert (r.returncode, r.stdout.strip()) == (0, "hi you from repo")
+    assert "running saved command greet (infra/commands/greet.sh)" in r.stderr
 
     assert cli.main(["run", "--list"]) == 0
     assert capfd.readouterr().out == 'greet\techo "hi $1 from $(basename "$PWD")"\n'
@@ -125,19 +171,33 @@ def test_save_list_show_and_run(repo, capfd):
     assert capfd.readouterr().out == script.read_text()
 
 
-def test_save_several_words_keeps_each_word(repo, capfd):
+def test_list_hides_terminal_escapes(repo, capfd):
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "e.sh").write_text("echo \x1b]0;title\x07 hi\n")
+    assert cli.main(["run", "--list"]) == 0
+    assert capfd.readouterr().out == "e\techo ?]0;title? hi\n"
+
+
+def test_double_dash_skips_saved_commands(repo, capfd):
+    assert cli.main(["run", "--save", "printf", "echo SAVED"]) == 0
+    assert qq("run", "printf", "x").stdout == "SAVED\n"
+    r = qq("run", "--", "printf", "x")
+    assert (r.stdout, r.stderr) == ("x", "")
+
+
+def test_save_several_words_keeps_each_word(repo):
     assert cli.main(["run", "--save", "p", "printf", "%s|", "a b", "$HOME"]) == 0
-    capfd.readouterr()
-    assert cli.main(["run", "p"]) == 0
-    assert capfd.readouterr().out == "a b|$HOME|"
+    r = qq("run", "p")
+    assert (r.returncode, r.stdout) == (0, "a b|$HOME|")
 
 
-def test_saved_command_arguments_are_not_shell_code(repo, tmp_path, capfd):
+def test_saved_command_arguments_are_not_shell_code(repo, tmp_path):
     assert cli.main(["run", "--save", "echoes", 'printf "%s\\n" "$@"']) == 0
     marker = tmp_path / "pwned"
-    assert cli.main(["run", "echoes", f"; touch {marker}", f"$(touch {marker})"]) == 0
+    r = qq("run", "echoes", f"; touch {marker}", f"$(touch {marker})")
+    assert r.returncode == 0
     assert not marker.exists()
-    assert capfd.readouterr().out.splitlines()[-2:] == [f"; touch {marker}", f"$(touch {marker})"]
+    assert r.stdout.splitlines() == [f"; touch {marker}", f"$(touch {marker})"]
 
 
 def test_save_refuses_overwrite_without_force(repo, capfd):
@@ -145,9 +205,7 @@ def test_save_refuses_overwrite_without_force(repo, capfd):
     assert cli.main(["run", "--save", "t", "echo two"]) == 2
     assert "--force" in capfd.readouterr().err
     assert cli.main(["run", "--save", "t", "--force", "echo two"]) == 0
-    capfd.readouterr()
-    assert cli.main(["run", "t"]) == 0
-    assert capfd.readouterr().out.strip() == "two"
+    assert qq("run", "t").stdout.strip() == "two"
 
 
 @pytest.mark.parametrize("name", ["../x", "a/b", "A", "-x", "x;y", "$(id)", "", "a" * 65, "x.sh"])
@@ -179,6 +237,6 @@ def test_symlinked_commands_are_refused(repo, tmp_path, capfd):
     assert capfd.readouterr().out == ""
 
 
-def test_an_unsaved_word_runs_as_a_command(repo, capfd):
-    assert cli.main(["run", "true"]) == 0
-    assert cli.main(["run", "false"]) == 1
+def test_an_unsaved_word_runs_as_a_command(repo):
+    assert qq("run", "true").returncode == 0
+    assert qq("run", "false").returncode == 1

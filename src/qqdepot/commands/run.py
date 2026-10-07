@@ -1,15 +1,16 @@
 """qq run: run a command, or a saved one, in the repo's qq environment.
 
     qq run "COMMAND LINE"          run it with /bin/sh
-    qq run PROGRAM [ARG ...]       run PROGRAM directly, with no shell in between
     qq run NAME [ARG ...]          run the saved command infra/commands/NAME.sh with these arguments
+    qq run PROGRAM [ARG ...]       run PROGRAM directly, with no shell in between
+    qq run -- PROGRAM [ARG ...]    the same, even when a saved command is named PROGRAM
     qq run --save NAME COMMAND...  save a command as infra/commands/NAME.sh, to commit with the repo
     qq run --list                  list the saved commands
     qq run --show NAME             print one
 
 Every command runs from the repo root. The bin directory of each toolchain `qq sync` linked under
-<repo>/.qq/toolchains comes first on PATH, so the command runs the versions the repo pins. qq exits
-with the command's exit code (128 + N when signal N ends it).
+<repo>/.qq/toolchains comes first on PATH, so the command runs the versions the repo pins. qq then
+becomes the command (exec), so its exit code and signals are the command's own.
 
 A saved command is code in the repo, like any script there: qq runs one only when you name it.
 """
@@ -19,7 +20,6 @@ import argparse
 import os
 import re
 import shlex
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -92,25 +92,28 @@ def saved_names(root: Path) -> list[str]:
 
 
 def toolchain_bins(root: Path) -> tuple[list[str], list[str]]:
-    """(bin directories to put first on PATH, pinned toolchains with none synced here).
+    """(bin directories to put first on PATH, pinned toolchains not synced here at their pin).
 
-    Only links `qq sync` made into this machine's store count, so a toolchain directory committed
-    to the repo never lands on PATH.
+    A toolchain counts only when its link points at the store entry for the digest the manifest
+    pins now, so a stale sync or a link committed to the repo never lands on PATH.
     """
     try:
-        pinned = list(load(root / MANIFEST).get("toolchains", {}))
+        manifest = load(root / MANIFEST)
     except ManifestError as e:
         raise RunError(str(e)) from None
-    synced = root / TOOLCHAINS
     store_root = store.store_dir().resolve()
     bins, missing = [], []
-    for name in pinned:
-        link = synced / name
-        if not link.is_symlink() or not link.resolve().is_relative_to(store_root):
+    for name in manifest.get("toolchains", {}):
+        link = root / TOOLCHAINS / name
+        try:
+            artifact = store.resolve(manifest, "toolchains", name)
+            target = link.resolve(strict=True) if link.is_symlink() else None
+        except (store.FetchError, OSError, RuntimeError):   # no pin for this platform; a bad link
+            target = None
+        if target is None or target != store_root / f"{artifact.algo}-{artifact.value}":
             missing.append(name)
-            continue
-        if (link / "bin").is_dir():
-            bins.append(str(link.resolve() / "bin"))
+        elif (target / "bin").is_dir():
+            bins.append(str(target / "bin"))
     return bins, missing
 
 
@@ -120,26 +123,25 @@ def environment(root: Path) -> dict[str, str]:
         print(f"qq: not synced here: {', '.join(missing)}; using PATH for them. Run qq sync"
               " (toolchains are published for Linux only so far)", file=sys.stderr)
     env = dict(os.environ)
-    env["PATH"] = os.pathsep.join([*bins, env.get("PATH", os.defpath)])
+    env["PATH"] = os.pathsep.join([*bins, env.get("PATH") or os.defpath])
+    env["PWD"] = str(root)
     return env
 
 
 def execute(argv: list[str], root: Path, env: dict[str, str]) -> int:
+    """Become the command, so its exit code, signals and terminal are its own. Returns only when
+    the command cannot start (127 not found, 126 not runnable, as a shell does)."""
+    sys.stdout.flush()
+    sys.stderr.flush()
     try:
-        proc = subprocess.Popen(argv, cwd=root, env=env)
+        os.chdir(root)
+        os.execvpe(argv[0], argv, env)
     except FileNotFoundError:
         print(f"qq: {argv[0]}: command not found", file=sys.stderr)
         return 127
-    except PermissionError:
-        print(f"qq: {argv[0]}: permission denied", file=sys.stderr)
+    except OSError as e:
+        print(f"qq: {argv[0]}: cannot run it: {e.strerror}", file=sys.stderr)
         return 126
-    while True:
-        try:
-            code = proc.wait()
-            break
-        except KeyboardInterrupt:
-            continue   # the terminal sent the command the same signal; its exit code decides
-    return 128 - code if code < 0 else code
 
 
 def save(root: Path, name: str, words: list[str], force: bool) -> Path:
@@ -173,9 +175,10 @@ def _umask() -> int:
 
 
 def _summary(path: Path) -> str:
+    """The script's first command line, with control characters (terminal escapes) shown as '?'."""
     for line in path.read_text(errors="replace").splitlines():
         if line.strip() and not line.lstrip().startswith("#"):
-            return line.strip()
+            return "".join(c if c.isprintable() else "?" for c in line.strip())
     return ""
 
 
@@ -184,8 +187,13 @@ def run_command(args: argparse.Namespace) -> int:
     if root is None:
         print(f"qq: no {MANIFEST} here or above {Path.cwd()}; run qq run inside a repo", file=sys.stderr)
         return 2
-    words = args.words[1:] if args.words[:1] == ["--"] else args.words
+    literal = args.words[:1] == ["--"]
+    words = args.words[1:] if literal else args.words
     try:
+        if args.force and args.save is None:
+            raise RunError("--force only goes with --save")
+        if (args.list or args.show is not None) and words:
+            raise RunError(f"--list and --show take no command (got {words[0]!r})")
         if args.list:
             for name in saved_names(root):
                 print(f"{name}\t{_summary(root / COMMANDS / f'{name}.sh')}")
@@ -202,7 +210,7 @@ def run_command(args: argparse.Namespace) -> int:
             return 0
         if not words:
             raise RunError('nothing to run: qq run "COMMAND", qq run NAME, or qq run --list')
-        path = saved_path(root, words[0]) if NAME.fullmatch(words[0]) else None
+        path = saved_path(root, words[0]) if NAME.fullmatch(words[0]) and not literal else None
         if path is not None:
             print(f"qq: running saved command {words[0]} ({path.relative_to(root)})", file=sys.stderr)
             argv = [SHELL, str(path), *words[1:]]
@@ -218,7 +226,8 @@ def run_command(args: argparse.Namespace) -> int:
 
 def register(sub) -> None:
     p = sub.add_parser("run", help="run a command, or a saved one, with the repo's pinned toolchains",
-                       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+                       description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                       allow_abbrev=False)
     group = p.add_mutually_exclusive_group()
     group.add_argument("--save", metavar="NAME", help="save COMMAND as infra/commands/NAME.sh")
     group.add_argument("--list", action="store_true", help="list the saved commands")

@@ -115,27 +115,32 @@ them, or `--toolchain NAME=ROOT`; any other toolchain is the one on `PATH`.
 ## Run a command with the repo's toolchains
 
 ```sh
-qq run "make test"                 # a command line, run with /bin/sh
-qq run make test                   # several words: the program runs directly, no shell
-qq run --save check "make test"    # save it as infra/commands/check.sh
-qq run check [ARG ...]             # run a saved command; ARGs are its "$@"
-qq run --list                      # list saved commands; --show NAME prints one
+qq run "./scripts/check --fast"       # a command line, run with /bin/sh
+qq run --save check "./scripts/check" # save it as infra/commands/check.sh
+qq run check [ARG ...]                # run a saved command; ARGs are its "$@"
+qq run PROGRAM [ARG ...]              # several words: PROGRAM runs directly, no shell
+qq run -- PROGRAM [ARG ...]           # the same, even when a saved command is named PROGRAM
+qq run --list                         # list saved commands; --show NAME prints one
 ```
 
 `qq run` runs from the repo root. The `bin` directory of each toolchain `qq sync` linked under
 `<repo>/.qq/toolchains` comes first on `PATH`, so the command uses the versions the manifest pins
-rather than whatever is installed. Only links into this machine's store count: a toolchain
-directory committed to the repo never lands on `PATH`. A pinned toolchain that is not synced is
-named on stderr and taken from `PATH`. Toolchains are published for Linux only so far, so on a Mac
-`qq run` runs the command with your own tools and says which pins it could not use. qq exits with
-the command's exit code (128 + N when signal N ends it).
+rather than whatever is installed. A toolchain counts only when its link points at the store entry
+for the digest pinned now: after a pin moves, the old one is not used, and a toolchain directory
+committed to the repo never lands on `PATH`. A pinned toolchain that is not synced at its pin is
+named on stderr and taken from `PATH`; run `qq sync`. Toolchains are published for Linux only so
+far, so on a Mac `qq run` runs the command with your own tools and names the pins it could not
+use. qq then becomes the command (exec), so its exit code, signals and terminal are the command's
+own. It runs in the foreground, like `qq build` and `qq test`; it is for local commands, not for
+handing long work to CI.
 
 Saved commands are POSIX shell scripts at `infra/commands/<name>.sh`, committed so teammates and
 agents run the same thing. `--save` writes one (`--force` replaces it); you can also write or edit
-one by hand. One argument is saved as typed; several are quoted so each stays one word. A name is
-lowercase letters, digits, `-` and `_`, so it can never be a path or shell syntax, and arguments
-reach the script as `"$@"`, never as shell code. When a name matches a saved command, that command
-runs and qq says so on stderr; otherwise the word runs as a command.
+one by hand. One argument is saved as typed; several are quoted so each stays one word, and
+arguments given when it runs reach it only through `"$@"`. A name is lowercase letters, digits,
+`-` and `_`, so it can never be a path or shell syntax, and arguments are never read as shell
+code. When the first word is a saved command's name, that command runs and qq says so on stderr;
+put `--` first to run a program of the same name instead.
 
 A saved command is code in the repo, like any script there. qq runs one only when you name it,
 never from `qq sync`, `qq build` or `qq test`; read it with `qq run --show NAME` before running one
