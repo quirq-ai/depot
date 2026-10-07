@@ -39,7 +39,7 @@ SHELL = "/bin/sh"
 QQ_FAILED = 125   # qq's own failure, as env and timeout use it; 126 and 127 as a shell does
 # A mention of the script's arguments: "$@", $*, $#, $1-$9, or ${@}, ${*}, ${1}... (not ${#name}).
 ARGUMENT = re.compile(r"\$(?:[@*#1-9]|\{[@*1-9])")
-HEREDOC = re.compile(r"<<(-?)[ \t]*((?:[^\s;&|<>()]|\\.)+)")
+HEREDOC = re.compile(r"<<(-?)[ \t]*((?:[^ \t\n;&|<>()]|\\.)+)")   # sh keeps a CR in the end word
 SUMMARY_BYTES, SUMMARY_CHARS = 4096, 120   # what qq --help reads and shows of each repo command
 BUILT_FOR = "linux-x86_64"   # the only platform toolchains are published for so far
 HEADER = ("#!/bin/sh\n"
@@ -52,10 +52,14 @@ class RunError(Exception):
     pass
 
 
+class UsageError(RunError):
+    """A bad name or a missing command: bad usage, not a failure to create."""
+
+
 def check_name(name: str) -> str:
     if not NAME.fullmatch(name):
-        raise RunError(f"{name!r} is not a command name: use lowercase letters, digits, '-' and '_'"
-                       " (at most 64, starting with a letter or digit)")
+        raise UsageError(f"{name!r} is not a command name: use lowercase letters, digits, '-' and '_'"
+                         " (at most 64, starting with a letter or digit)")
     return name
 
 
@@ -213,12 +217,12 @@ def save(root: Path, name: str, words: list[str], force: bool) -> Path:
         raise RunError(f"{name!r} is one typo away from qq {taken}, so a mistyped qq {taken} would run it;"
                        " pick another name")
     if not words:
-        raise RunError(f"nothing to create: qq create {name} COMMAND")
+        raise UsageError(f"nothing to create: qq create {name} COMMAND")
     # One argument is a command line, kept as typed. Several are quoted so each stays one word,
     # and the arguments given when it runs are passed on after them.
     line = words[0] if len(words) == 1 else shlex.join(words) + ' "$@"'
     if not line.strip():
-        raise RunError(f"nothing to create: qq create {name} COMMAND")
+        raise UsageError(f"nothing to create: qq create {name} COMMAND")
     try:
         line.encode()
     except UnicodeEncodeError:

@@ -243,7 +243,9 @@ def test_arguments_are_refused_unless_the_script_mentions_them(repo):
     ("cat <<EOF\n$1\nEOF", True), ("cat <<-EOF\n\t$1\n\tEOF", True), ("cat <<EOF\n\\$1\nEOF", False),
     ("cat <<EOF\nDon't\nEOF\necho a b | awk '{print $1}'", False),
     ('cat <<EOF\n5" disk\nEOF\necho a b | awk \'{print $1}\'', False),
-    ("cat <<'EOF'\nDon't $1\nEOF\necho \"$@\"", True), ("cat <<EOF\nno end $1", True), ("cat <<EOF\nno end", False),
+    ("cat <<'EOF'\nDon't $1\nEOF\necho \"$@\"", True),
+    ("cat <<EOF\r\nDon't\r\nEOF\r\necho a b | awk '{print $1}'\r\n", False),   # sh keeps the CR in EOF
+    ("cat <<'EOF'\r\n$1\r\nEOF\r\necho \"$@\"\r\n", True), ("cat <<EOF\r\nx\r\nEOF\r\necho $1\r\n", True), ("cat <<EOF\nno end $1", True), ("cat <<EOF\nno end", False),
 ])
 def test_mentions_arguments(script, mentions):
     from qqdepot.commands import run
@@ -284,7 +286,7 @@ def test_a_committed_script_never_shadows_a_qq_command(repo):
 
 @pytest.mark.parametrize("name", ["../x", "a/b", "A", "-x", "x;y", "$(id)", "", "a" * 65, "x.sh"])
 def test_bad_names_are_refused(repo, capfd, name):
-    assert cli.main(["create", "--", name, "true"] if name.startswith("-") else ["create", name, "true"]) in (1, 2)
+    assert cli.main(["create", "--", name, "true"] if name.startswith("-") else ["create", name, "true"]) == 2
     assert not (repo / "infra" / "commands").exists() or not any((repo / "infra" / "commands").iterdir())
 
 
@@ -295,7 +297,7 @@ def test_non_utf8_create_is_refused(repo, capfd):
 
 
 def test_create_needs_a_command(repo, capfd):
-    assert cli.main(["create", "empty"]) == 1
+    assert cli.main(["create", "empty"]) == 2
     assert "nothing to create" in capfd.readouterr().err
 
 

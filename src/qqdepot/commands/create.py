@@ -34,7 +34,7 @@ def run_create(args: argparse.Namespace) -> int:
         path = run.save(root, args.name, words, force)
     except (run.RunError, OSError) as e:
         print(f"qq: {e}", file=sys.stderr)
-        return 1
+        return 2 if isinstance(e, run.UsageError) else 1
     print(f"qq: created qq {args.name} ({path.relative_to(root)}); commit it to share it")
     return 0
 

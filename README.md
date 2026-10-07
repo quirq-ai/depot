@@ -139,8 +139,8 @@ When qq itself fails (bad usage, no repo, a broken or unreadable command file, a
 exits 125, so its errors never look like the command's; a command that cannot start gives 127 (not
 found) or 126 (not runnable), as a shell does. It runs in the foreground, like `qq build` and `qq
 test`; it is for local commands, not for handing long work to CI. `qq create` passes nothing
-through, so it exits like the other qq commands: 2 on bad usage or outside a repo, 1 when it cannot
-create the command.
+through, so it exits like the other qq commands: 2 on bad usage (a bad name, no command) or outside
+a repo, 1 when it cannot create the command (the name is taken, the file exists).
 
 `qq create NAME COMMAND` writes a POSIX shell script at `infra/commands/NAME.sh`; commit it so
 teammates and agents get `qq NAME` too (`qq create --force NAME COMMAND` replaces one; you can also
