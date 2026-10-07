@@ -14,7 +14,8 @@ contributor needs (`gclient`, `git cl upload`, `git cl try`, `git cl land`).
 - Thin. `qq` wraps git and `gh` (behind a `github` backend; `launchpad`, quirq's own cloud, later)
   and calls other qq repos' libraries by pinned commit: manifests through `sync`, toolchains
   through `toolchains`, builds through `recipes`.
-- Pluggable. Other repos add subcommands; `release` adds `qq channel rollback`.
+- Pluggable. Other repos add subcommands; `release` defines `qq channel rollback`. qq's own
+  environment does not install release's package yet, so `qq --help` does not list it.
 - Acknowledge, then push. Commands that start long work return a run ID at once and the verdict
   arrives later, so no agent holds a tool call open during a build.
 
@@ -28,6 +29,11 @@ git clone https://github.com/quirq-ai/depot ~/depot
 export PATH="$HOME/depot/bin:$PATH"
 qq --version
 ```
+
+`qq --version` prints `qq 0.1.0`. The full install, with `qqsync` and `PATH` set up, is in the qq
+guide: https://docs.quirq.dev/docs/qq. Toolchains are published for Linux x86_64 only: on a Mac,
+`qq sync` stops with `no pin for platform macos-arm64`, so use `git clone` instead of `qq fetch`,
+and give `qq build` and `qq test` toolchains you installed yourself (`--toolchain python=ROOT`).
 
 ## Version pinning
 
@@ -43,7 +49,9 @@ version = "0.1.0"          # installs depot tag v0.1.0
 Inside such a repo, `qq` runs exactly the pinned version. The first run on a machine installs it
 into its own environment under `$QQ_HOME` (default `~/.cache/qq/versions/<version>`) and checks
 that it reports the pinned version; later runs reuse it. When a roll moves the pin, the next `qq`
-installs the new version by itself: that is how `qq` updates. Outside a repo, or in one without a
+installs the new version by itself: that is how `qq` updates. depot has no release tag yet, so no
+`v0.1.0` tag exists to install; a pin of version `0.1.0` with no `source` or `digest` runs your depot
+checkout, which reports `0.1.0`. Outside a repo, or in one without a
 `[qq]` table, `qq` runs the version of your depot checkout.
 
 Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/depot, and
@@ -170,7 +178,7 @@ does not run them yet.
 
 A repo that pins `[qq] version = "0.1.0"` (xo-space and innernet do) runs the `qq` of your depot
 checkout, since that is the version it reports, so it has these commands once your checkout
-includes this change. A repo that pins qq by digest gets them when its pin moves to a commit that
+includes #23. A repo that pins qq by digest gets them when its pin moves to a commit that
 has them.
 
 ## Send a change through the gate
@@ -179,7 +187,7 @@ has them.
 qq upload [--title T] [--draft]   # push this branch, open or update its change
 qq try [CHANGE] [--notify CMD]    # upload, print a run ID and exit; the verdict is pushed later
 qq land [CHANGE] [--notify CMD]   # land once the gate passes (merge queue); returns at once
-qq status [CHANGE]                # the gate's verdict now: exit 0 pass, 1 refused, 3 pending
+qq status [CHANGE]                # the gate's verdict now: exit 0 pass, 1 refused, 2 error, 3 pending
 ```
 
 Acknowledge, then push: `qq try` and `qq land` return a run ID at once, so an agent never holds a
@@ -223,7 +231,7 @@ Python 3.14 in CI (the org pin in infra-config); `qq` itself needs 3.11.4 or new
 | V0-DEP-01 | `qq` skeleton with version pinning | #2 | merged; done-when shown by `tests/test_fresh_machine.py` in presubmit |
 | V0-DEP-02 | `qq fetch` and `qq sync` | #4 | merged; a fresh clone builds after `qq sync` alone in `tests/test_sync.py`. The `e2e-sync` workflow (#17) runs `qq fetch` (clone at main, then `qq sync`) on xo-space and innernet nightly and on demand, from public ghcr with no credentials |
 | V0-DEP-03 | `qq build` and `qq test` | #3, #5 | merged; presubmit `parity` runs `qq test` and `qqrecipes execute` on xo-space and innernet on separate runners and compares their JUnit. Parity still reads sync's fixture manifests, not the repos' own `infra/repo.toml`. Not done: product CI does not run recipes yet (see Build and test like CI) |
-| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. Live verdicts on xo-space and innernet wait on the rulesets (V0-ORG-03) |
+| V0-DEP-04 | `qq upload`, `try`, `land`, `status` | #7 | merged; `tests/test_change.py` shows try returning a run ID and the verdict pushed later (fake gh); presubmit `live` runs the pinned gate and `qq status` through the real `gh`. gate's repo rulesets (V0-ORG-03) are applied; a live `qq try` or `qq land` on xo-space or innernet is not shown here yet |
 
 Plan and every v0 item: `quirq-ai/infra-config`, `docs/plan.md` and `docs/v0.md`.
 
