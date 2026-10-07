@@ -333,3 +333,33 @@ def test_unreadable_commands_dir_is_an_error(repo):
         assert r.returncode == 125 and "cannot read" in r.stderr
     finally:
         (repo / "infra" / "commands").chmod(0o755)
+
+
+@pytest.mark.parametrize("name", ["snyc", "sycn", "synk", "sync2", "fech", "biuld", "lands", "ru", "statu"])
+def test_one_typo_from_a_qq_command_is_refused(repo, capfd, name):
+    assert cli.main(["create", name, "echo hijacked"]) == 125
+    assert "one typo away from qq" in capfd.readouterr().err
+
+
+def test_a_committed_typo_name_never_runs(repo):
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "snyc.sh").write_text("echo hijacked\n")
+    r = qq("snyc")
+    assert r.returncode == 125 and "hijacked" not in r.stdout and "one typo away from qq sync" in r.stderr
+    assert "snyc" not in qq("--help").stdout
+
+
+@pytest.mark.parametrize("name", ["space", "deploy-preview", "lint", "check", "fmt"])
+def test_ordinary_names_are_fine(repo, name):
+    assert cli.main(["create", name, "true"]) == 0
+
+
+def test_only_the_exact_file_name_runs(repo, monkeypatch):
+    """On a case-insensitive file system, qq space must not run Space.sh."""
+    from qqdepot.commands import run
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "Space.sh").write_text("echo wrong case\n")
+    real_lstat = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda self: real_lstat(self.with_name("Space.sh"))
+                        if self.name == "space.sh" else real_lstat(self))
+    assert run.saved_path(repo, "space") is None

@@ -150,6 +150,9 @@ only: a function's own `$1` or a heredoc counts too. A name is lowercase letters
 `_`, so it can never be a path or shell syntax, and arguments are never read as shell code. qq's
 own commands always win: a name qq already answers to (`sync`, `fetch`, `build`, `land`, a
 plugin's command, ...) cannot be created, and a script committed under such a name is never run.
+Nor can a name one typo away from one (`snyc`, `tets`, `lands`): a mistyped `qq sync` must never
+run the repo's code, so such a script is refused rather than run. Only the exact file name counts,
+also on a case-insensitive file system (`qq space` never runs `Space.sh`).
 `qq --help` lists each command's first line with control characters and bytes that are not UTF-8
 written as `\xNN` (and a backslash as `\\`).
 

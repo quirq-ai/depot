@@ -98,7 +98,11 @@ def saved_path(root: Path, name: str) -> Path | None:
         raise RunError(f"{path} is a symlink; a repo's command must be a file in the repo")
     if not stat.S_ISREG(st.st_mode):
         raise RunError(f"{path} is not a file")
-    return path
+    try:   # a case-insensitive file system answers for Space.sh too: only the exact name counts
+        exact = path.name in os.listdir(directory)
+    except OSError as e:
+        raise RunError(f"cannot read {directory}: {e.strerror}") from None
+    return path if exact else None
 
 
 def saved_names(root: Path) -> list[str]:
@@ -177,11 +181,35 @@ def qq_commands() -> set[str]:
     return set(cli.build_parser().qq_commands)
 
 
+def _one_edit_apart(a: str, b: str) -> bool:
+    """True when one insertion, deletion, substitution or swap of neighbours turns a into b."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                                  and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    short, long = sorted((a, b), key=len)
+    return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
+
+
+def shadowed(name: str, commands: set[str]) -> str | None:
+    """The qq command NAME is, or is one typo away from (`snyc` for sync), or None. A repo's command
+    never takes such a name: a mistyped `qq sync` must never run the repo's code."""
+    if name in commands:
+        return name
+    return next((c for c in sorted(commands) if _one_edit_apart(name, c)), None)
+
+
 def save(root: Path, name: str, words: list[str], force: bool) -> Path:
     """Write the repo command NAME (`qq create`)."""
     check_name(name)
-    if name in qq_commands():
+    taken = shadowed(name, qq_commands())
+    if taken == name:
         raise RunError(f"{name!r} is already a qq command (qq {name}); pick another name")
+    if taken:
+        raise RunError(f"{name!r} is one typo away from qq {taken}, so a mistyped qq {taken} would run it;"
+                       " pick another name")
     if not words:
         raise RunError(f"nothing to create: qq create {name} COMMAND")
     # One argument is a command line, kept as typed. Several are quoted so each stays one word,
@@ -267,18 +295,20 @@ def _summary(path: Path) -> str:
     return ""
 
 
-def repo_commands() -> list[tuple[str, str]]:
-    """(name, first command line) for each command of the repo here, for qq --help; none outside
-    a repo or when infra/commands cannot be read."""
+def repo_commands(commands: set[str]) -> list[tuple[str, str]]:
+    """(name, first command line) for each command of the repo here that qq NAME runs, for
+    qq --help; none outside a repo or when infra/commands cannot be read."""
     root = repo_root(Path.cwd())
     try:
-        return [] if root is None else [(n, _summary(root / COMMANDS / f"{n}.sh")) for n in saved_names(root)]
+        return [] if root is None else [(n, _summary(root / COMMANDS / f"{n}.sh"))
+                                        for n in saved_names(root) if not shadowed(n, commands)]
     except (RunError, OSError):
         return []
 
 
-def run_saved(name: str, arguments: list[str]) -> int | None:
-    """`qq NAME ARG...` for the repo command NAME, or None when the repo here has none by that name."""
+def run_saved(name: str, arguments: list[str], commands: set[str]) -> int | None:
+    """`qq NAME ARG...` for the repo command NAME, or None when the repo here has none by that name.
+    `commands` are qq's own: a name that is one typo away from one is never run."""
     root = repo_root(Path.cwd())
     if root is None or not NAME.fullmatch(name):
         return None
@@ -286,6 +316,9 @@ def run_saved(name: str, arguments: list[str]) -> int | None:
         path = saved_path(root, name)
         if path is None:
             return None
+        if taken := shadowed(name, commands):
+            raise RunError(f"not running {path.relative_to(root)}: {name} is one typo away from qq {taken},"
+                           " so a mistyped command would run the repo's code. Rename the file")
         if arguments and not mentions_arguments(_read(path)):
             raise RunError(f"qq {name} never mentions its arguments (\"$@\"), so {shlex.join(arguments)}"
                            f" would be dropped; add \"$@\" where they go in {path.relative_to(root)}")

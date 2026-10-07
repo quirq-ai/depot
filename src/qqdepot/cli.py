@@ -36,9 +36,9 @@ def build_parser(epilog: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-def repo_epilog() -> str | None:
+def repo_epilog(qq_commands: set[str]) -> str | None:
     """This repo's own commands (qq create), listed under qq's in qq --help."""
-    commands = run.repo_commands()
+    commands = run.repo_commands(qq_commands)
     if not commands:
         return None
     width = max(len(name) for name, _ in commands)
@@ -58,9 +58,10 @@ def main(argv: list[str] | None = None) -> int:
         return run.QQ_FAILED if passthrough else 2
     if argv[:1] == ["run"]:   # parsed on its own: its usage errors must not exit 2 like a command's
         return run.main(argv[1:])
-    parser = build_parser(repo_epilog())
+    parser = build_parser()
+    parser.epilog = repo_epilog(set(parser.qq_commands))
     if argv and not argv[0].startswith("-") and argv[0] not in parser.qq_commands:
-        code = run.run_saved(argv[0], argv[1:])   # qq NAME: a command this repo created
+        code = run.run_saved(argv[0], argv[1:], set(parser.qq_commands))   # qq NAME: this repo's command
         if code is not None:
             return code
     args = parser.parse_args(argv)
