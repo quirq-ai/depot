@@ -219,7 +219,7 @@ def test_arguments_are_not_shell_code(repo, tmp_path):
     assert r.stdout.splitlines() == [f"; touch {marker}", f"$(touch {marker})"]
 
 
-def test_arguments_are_never_dropped(repo):
+def test_arguments_are_refused_unless_the_script_mentions_them(repo):
     assert cli.main(["create", "fixed", "echo fixed"]) == 0
     assert qq("fixed").stdout == "fixed\n"
     r = qq("fixed", "--fast")
@@ -237,6 +237,13 @@ def test_arguments_are_never_dropped(repo):
     ("awk '{print $1}'", False), ("awk '{\n print $1\n}' f", False), ("n=${#v}", False),
     ("cmd # was $1", False), ("echo \\$1", False), ("# $1\ncmd", False),
     ("cmd # x\fy $1", False), ("cmd # x\u2028 $1", False), ("echo a#$1", True), ('echo "#$1"', True),
+    ('x="$(echo a b | awk \'{print $1}\')"', False), ('x="`echo a b | awk \'{print $1}\'`"', False),
+    ('echo "$(printf %s "$1")"', True), ('echo "$(echo \'it\'"s $1")"', True), ("echo $(( 1 << 2 )) $1", True),
+    ("cat <<'EOF'\n$1\nEOF", False), ('cat <<"EOF"\n$1\nEOF', False), ("cat <<\\EOF\n$1\nEOF", False),
+    ("cat <<EOF\n$1\nEOF", True), ("cat <<-EOF\n\t$1\n\tEOF", True), ("cat <<EOF\n\\$1\nEOF", False),
+    ("cat <<EOF\nDon't\nEOF\necho a b | awk '{print $1}'", False),
+    ('cat <<EOF\n5" disk\nEOF\necho a b | awk \'{print $1}\'', False),
+    ("cat <<'EOF'\nDon't $1\nEOF\necho \"$@\"", True), ("cat <<EOF\nno end $1", True), ("cat <<EOF\nno end", False),
 ])
 def test_mentions_arguments(script, mentions):
     from qqdepot.commands import run
@@ -245,15 +252,25 @@ def test_mentions_arguments(script, mentions):
 
 def test_create_refuses_overwrite_without_force(repo, capfd):
     assert cli.main(["create", "t", "echo one"]) == 0
-    assert cli.main(["create", "t", "echo two"]) == 125
+    assert cli.main(["create", "t", "echo two"]) == 1
     assert "--force" in capfd.readouterr().err
     assert cli.main(["create", "--force", "t", "echo two"]) == 0
     assert qq("t").stdout.strip() == "two"
+    assert cli.main(["create", "t", "--force", "echo three"]) == 0   # --force after NAME is the flag too
+    assert qq("t").stdout.strip() == "three"
+    assert cli.main(["create", "t", "--force", "--", "--force", "x"]) == 0   # after --, it is the command
+    assert (repo / "infra" / "commands" / "t.sh").read_text().endswith("--force x \"$@\"\n")
+
+
+def test_create_exit_codes_match_the_other_qq_commands(tmp_path, monkeypatch, capfd):
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["create", "space", "true"]) == 2
+    assert "run qq create inside a repo" in capfd.readouterr().err
 
 
 @pytest.mark.parametrize("name", ["sync", "fetch", "build", "test", "land", "status", "run", "create"])
 def test_qq_commands_cannot_be_taken(repo, capfd, name):
-    assert cli.main(["create", name, "echo hijacked"]) == 125
+    assert cli.main(["create", name, "echo hijacked"]) == 1
     assert "already a qq command" in capfd.readouterr().err
     assert not (repo / "infra" / "commands" / f"{name}.sh").exists()
 
@@ -267,18 +284,18 @@ def test_a_committed_script_never_shadows_a_qq_command(repo):
 
 @pytest.mark.parametrize("name", ["../x", "a/b", "A", "-x", "x;y", "$(id)", "", "a" * 65, "x.sh"])
 def test_bad_names_are_refused(repo, capfd, name):
-    assert cli.main(["create", "--", name, "true"] if name.startswith("-") else ["create", name, "true"]) in (2, 125)
+    assert cli.main(["create", "--", name, "true"] if name.startswith("-") else ["create", name, "true"]) in (1, 2)
     assert not (repo / "infra" / "commands").exists() or not any((repo / "infra" / "commands").iterdir())
 
 
 def test_non_utf8_create_is_refused(repo, capfd):
     bad = b"echo \xff".decode("utf-8", "surrogateescape")
-    assert cli.main(["create", "bad", bad]) == 125
+    assert cli.main(["create", "bad", bad]) == 1
     assert "not valid UTF-8" in capfd.readouterr().err
 
 
 def test_create_needs_a_command(repo, capfd):
-    assert cli.main(["create", "empty"]) == 125
+    assert cli.main(["create", "empty"]) == 1
     assert "nothing to create" in capfd.readouterr().err
 
 
@@ -337,7 +354,7 @@ def test_unreadable_commands_dir_is_an_error(repo):
 
 @pytest.mark.parametrize("name", ["snyc", "sycn", "synk", "sync2", "fech", "biuld", "lands", "ru", "statu"])
 def test_one_typo_from_a_qq_command_is_refused(repo, capfd, name):
-    assert cli.main(["create", name, "echo hijacked"]) == 125
+    assert cli.main(["create", name, "echo hijacked"]) == 1
     assert "one typo away from qq" in capfd.readouterr().err
 
 
@@ -363,3 +380,71 @@ def test_only_the_exact_file_name_runs(repo, monkeypatch):
     monkeypatch.setattr(Path, "lstat", lambda self: real_lstat(self.with_name("Space.sh"))
                         if self.name == "space.sh" else real_lstat(self))
     assert run.saved_path(repo, "space") is None
+
+
+def test_qq_double_dash_name_runs_it(repo):
+    assert cli.main(["create", "space", "echo space"]) == 0
+    r = qq("--", "space")
+    assert (r.returncode, r.stdout) == (0, "space\n")
+
+
+def test_qq_name_help_shows_its_usage_when_it_takes_no_arguments(repo):
+    assert cli.main(["create", "fixed", "echo fixed"]) == 0
+    for flag in ("-h", "--help"):
+        r = qq("fixed", flag)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == "usage: qq fixed\n\n  echo fixed\n\nthis repo's command, from infra/commands/fixed.sh\n"
+    assert cli.main(["create", "takes", 'echo "got $1"']) == 0
+    assert qq("takes", "--help").stdout == "got --help\n"   # a command that takes arguments gets its --help
+
+
+def test_the_repo_commands_are_read_only_for_help(repo, monkeypatch):
+    from qqdepot.commands import run
+    assert cli.main(["create", "space", "true"]) == 0
+    monkeypatch.setattr(run, "repo_commands", lambda commands: pytest.fail("read the repo's commands"))
+    with pytest.raises(SystemExit) as e:
+        cli.main(["sync", "--no-such-option"])
+    assert e.value.code == 2
+
+
+def test_help_summary_is_short_and_reads_only_the_start(repo):
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "long.sh").write_text("echo " + "x" * 300 + "\n")
+    (repo / "infra" / "commands" / "late.sh").write_text("#" * 5000 + "\necho late\n")
+    out = qq("--help").stdout
+    assert "  long  echo " + "x" * 114 + "…\n" in out
+    assert "  late" in out and "echo late" not in out   # past the first 4 KiB: not read
+
+
+def unreadable(path: Path) -> None:
+    path.chmod(0)
+    try:
+        path.open("rb").close()
+        pytest.skip("this user reads any file (root)")
+    except PermissionError:
+        pass
+
+
+def test_unreadable_script_is_qqs_error_and_shown_in_help(repo):
+    assert cli.main(["create", "locked", "echo locked"]) == 0
+    assert cli.main(["create", "open", "echo open"]) == 0
+    script = repo / "infra" / "commands" / "locked.sh"
+    try:
+        unreadable(script)
+        for args in (("locked",), ("locked", "a")):
+            r = qq(*args)
+            assert r.returncode == 125 and "cannot read infra/commands/locked.sh" in r.stderr, r.stderr
+        out = qq("--help").stdout
+        assert "  locked  (cannot read it)" in out and "  open    echo open" in out
+    finally:
+        script.chmod(0o755)
+
+
+@pytest.mark.parametrize("text, shown", [
+    ("\x1b[2K", "\\x1b[2K"), ("a\\x1b", "a\\\\x1b"), ("\x85", "\\u0085"), ("\xa0", "\\u00a0"),
+    ("\udc85", "\\x85"), ("\u2028", "\\u2028"), ("\U000e0041", "\\U000e0041"), ("\ue004" + "1", "\\ue0041"),
+    ("plain é", "plain é"),
+])
+def test_visible_escapes_read_back_exactly(text, shown):
+    from qqdepot.commands import run
+    assert run.visible(text) == shown

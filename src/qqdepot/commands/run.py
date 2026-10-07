@@ -39,6 +39,8 @@ SHELL = "/bin/sh"
 QQ_FAILED = 125   # qq's own failure, as env and timeout use it; 126 and 127 as a shell does
 # A mention of the script's arguments: "$@", $*, $#, $1-$9, or ${@}, ${*}, ${1}... (not ${#name}).
 ARGUMENT = re.compile(r"\$(?:[@*#1-9]|\{[@*1-9])")
+HEREDOC = re.compile(r"<<(-?)[ \t]*((?:[^\s;&|<>()]|\\.)+)")
+SUMMARY_BYTES, SUMMARY_CHARS = 4096, 120   # what qq --help reads and shows of each repo command
 BUILT_FOR = "linux-x86_64"   # the only platform toolchains are published for so far
 HEADER = ("#!/bin/sh\n"
           "# Created with `qq create {name}`; run it with `qq {name} [ARG ...]`.\n"
@@ -225,7 +227,7 @@ def save(root: Path, name: str, words: list[str], force: bool) -> Path:
     path = directory / f"{name}.sh"
     st = _lstat(path)
     if st is not None and (stat.S_ISLNK(st.st_mode) or not force):
-        raise RunError(f"{path.relative_to(root)} already exists; pass --force to replace it")
+        raise RunError(f"{path.relative_to(root)} already exists; to replace it: qq create --force {name} COMMAND")
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{name}.")
     try:
         with os.fdopen(fd, "w") as out:
@@ -245,12 +247,14 @@ def _umask() -> int:
 
 
 def visible(text: str, keep: str = "") -> str:
-    """`text` with control characters (terminal escapes, carriage returns) and bytes that are not
-    UTF-8 written as \\xNN and a backslash as \\\\, so what is shown is what runs. Characters in
-    `keep` stay as they are."""
-    return "".join("\\\\" if c == "\\" else c if c.isprintable() or c in keep
-                   else f"\\x{ord(c) & 0xff:02x}" if ord(c) < 0x100 or 0xdc80 <= ord(c) <= 0xdcff
-                   else f"\\u{ord(c):04x}" for c in text)
+    """`text` with what a terminal would act on written as escapes, so what is shown is what runs:
+    \\xNN for ASCII controls and bytes that are not UTF-8, \\uNNNN or \\UNNNNNNNN for other characters
+    that do not print, and a backslash as \\\\. It reads back exactly. Characters in `keep` stay."""
+    def escape(o: int) -> str:
+        if o < 0x80 or 0xdc80 <= o <= 0xdcff:
+            return f"\\x{o & 0xff:02x}"
+        return f"\\u{o:04x}" if o <= 0xffff else f"\\U{o:08x}"
+    return "".join("\\\\" if c == "\\" else c if c.isprintable() or c in keep else escape(ord(c)) for c in text)
 
 
 def _read(path: Path) -> str:
@@ -258,46 +262,101 @@ def _read(path: Path) -> str:
 
 
 def mentions_arguments(script: str) -> bool:
-    """True when the script mentions its arguments outside single quotes, comments and backslash
-    escapes. Only a mention: a function's own $1 or a heredoc cannot be told apart by reading."""
-    i, in_double, word_start = 0, False, True
+    """True when the script mentions its arguments outside single quotes, comments, backslash escapes
+    and quoted heredocs. $( and ` start a new shell context even inside double quotes. Only a
+    mention: a function's own $1 or `set --` cannot be told apart by reading."""
+    i, stack, word_start, pending = 0, [""], True, []   # "" code, '"' quotes, "(" $( ), "`", "((" $(( ))
     while i < len(script):
-        c = script[i]
+        c, ctx = script[i], stack[-1]
         if c == "\\":
             i, word_start = i + 2, False
             continue
-        if c == "'" and not in_double:
+        if c == "$" and ARGUMENT.match(script, i):
+            return True
+        if script.startswith("$((", i):
+            stack.append("((")
+            i += 3
+            continue
+        if script.startswith("$(", i):
+            stack.append("(")
+            i, word_start = i + 2, True
+            continue
+        if ctx == "((":                          # arithmetic: its << is a shift, not a heredoc
+            if script.startswith("))", i):
+                stack.pop()
+                i += 2
+            else:
+                i += 1
+            continue
+        if ctx == '"':                           # in double quotes only $, ` and \ are special
+            if c == '"':
+                stack.pop()
+            elif c == "`":
+                stack.append("`")
+            i += 1
+            continue
+        if c == "'":
             end = script.find("'", i + 1)
             if end < 0:
                 return False
             i, word_start = end + 1, False
             continue
-        if c == '"':
-            in_double = not in_double
-        elif c == "#" and word_start and not in_double:
-            end = script.find("\n", i)   # a comment ends at a newline, nothing else
+        if c == "#" and word_start:
+            end = script.find("\n", i)           # a comment ends at a newline, nothing else
             if end < 0:
                 return False
-            i, word_start = end + 1, True
+            i = end                              # the newline itself is handled next
             continue
-        elif c == "$" and ARGUMENT.match(script, i):
-            return True
-        word_start = c in " \t\n;|&()"
+        m = HEREDOC.match(script, i) if script.startswith("<<", i) and not script.startswith("<<<", i) else None
+        if m:      # the body follows this line; a quoted delimiter means nothing in it expands
+            word = m.group(2)
+            pending.append((re.sub(r"\\(.)|[\"']", r"\1", word), m.group(1) == "-", any(q in word for q in "\\\"'")))
+            i, word_start = m.end(), False
+            continue
+        if c == "\n" and pending:
+            for delim, tabs, quoted in pending:
+                while True:
+                    end = script.find("\n", i + 1)
+                    line = script[i + 1:] if end < 0 else script[i + 1:end]
+                    if (line.lstrip("\t") if tabs else line) == delim:
+                        break
+                    if not quoted and ARGUMENT.search(re.sub(r"\\.", "", line)):
+                        return True
+                    if end < 0:
+                        return False             # no end line
+                    i = end
+                i = len(script) if end < 0 else end
+            pending, word_start = [], True
+            i += 1
+            continue
+        if c == '"':
+            stack.append('"')
+        elif c == ")" and ctx == "(":
+            stack.pop()
+        elif c == "`":
+            stack.pop() if ctx == "`" else stack.append("`")
+        word_start = c in " \t\n;|&()`"
         i += 1
     return False
 
 
 def _summary(path: Path) -> str:
-    """The script's first command line, shown visibly."""
-    for line in _read(path).split("\n"):
+    """The script's first command line, shown visibly, from its first SUMMARY_BYTES only."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(SUMMARY_BYTES).decode("utf-8", errors="surrogateescape")
+    except OSError:
+        return "(cannot read it)"
+    for line in head.split("\n"):
         if line.strip() and not line.lstrip().startswith("#"):
-            return visible(line.strip())
+            shown = visible(line.strip())
+            return shown if len(shown) <= SUMMARY_CHARS else shown[:SUMMARY_CHARS - 1] + "…"
     return ""
 
 
 def repo_commands(commands: set[str]) -> list[tuple[str, str]]:
     """(name, first command line) for each command of the repo here that qq NAME runs, for
-    qq --help; none outside a repo or when infra/commands cannot be read."""
+    qq --help; none outside a repo or when infra/commands cannot be listed."""
     root = repo_root(Path.cwd())
     try:
         return [] if root is None else [(n, _summary(root / COMMANDS / f"{n}.sh"))
@@ -319,7 +378,14 @@ def run_saved(name: str, arguments: list[str], commands: set[str]) -> int | None
         if taken := shadowed(name, commands):
             raise RunError(f"not running {path.relative_to(root)}: {name} is one typo away from qq {taken},"
                            " so a mistyped command would run the repo's code. Rename the file")
-        if arguments and not mentions_arguments(_read(path)):
+        try:
+            script = _read(path)                 # unreadable is qq's error (125), never sh's
+        except OSError as e:
+            raise RunError(f"cannot read {path.relative_to(root)}: {e.strerror}") from None
+        if arguments and not mentions_arguments(script):
+            if arguments in (["-h"], ["--help"]):   # like a qq command's --help
+                print(f"usage: qq {name}\n\n  {_summary(path)}\n\nthis repo's command, from {path.relative_to(root)}")
+                return 0
             raise RunError(f"qq {name} never mentions its arguments (\"$@\"), so {shlex.join(arguments)}"
                            f" would be dropped; add \"$@\" where they go in {path.relative_to(root)}")
         return execute([SHELL, str(path), *arguments], root, environment(root))

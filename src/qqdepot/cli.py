@@ -53,17 +53,21 @@ def main(argv: list[str] | None = None) -> int:
     except PinError as e:
         print(f"qq: {e}", file=sys.stderr)
         # qq run and a repo's commands pass the command's exit code through, so their own failures are 125.
-        passthrough = argv[:1] == ["run"] or (bool(argv) and not argv[0].startswith("-")
-                                             and argv[0] not in build_parser().qq_commands)
+        route = argv[1:] if argv[:1] == ["--"] else argv
+        passthrough = route[:1] == ["run"] or (bool(route) and not route[0].startswith("-")
+                                               and route[0] not in build_parser().qq_commands)
         return run.QQ_FAILED if passthrough else 2
-    if argv[:1] == ["run"]:   # parsed on its own: its usage errors must not exit 2 like a command's
-        return run.main(argv[1:])
+    route = argv[1:] if argv[:1] == ["--"] else argv   # qq -- NAME routes like qq -- sync
+    if route[:1] == ["run"]:   # parsed on its own: its usage errors must not exit 2 like a command's
+        return run.main(route[1:])
     parser = build_parser()
-    parser.epilog = repo_epilog(set(parser.qq_commands))
-    if argv and not argv[0].startswith("-") and argv[0] not in parser.qq_commands:
-        code = run.run_saved(argv[0], argv[1:], set(parser.qq_commands))   # qq NAME: this repo's command
+    commands = set(parser.qq_commands)
+    if route and not route[0].startswith("-") and route[0] not in commands:
+        code = run.run_saved(route[0], route[1:], commands)   # qq NAME: this repo's command
         if code is not None:
             return code
+    if not argv or argv[0] in ("-h", "--help"):   # read the repo's commands only to print help
+        parser.epilog = repo_epilog(commands)
     args = parser.parse_args(argv)
     if getattr(args, "run", None) is None:
         parser.print_help()
