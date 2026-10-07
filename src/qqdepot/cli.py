@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         dispatch(argv)
     except PinError as e:
         print(f"qq: {e}", file=sys.stderr)
-        return 2
+        return run.QQ_FAILED if argv[:1] == ["run"] else 2   # qq run's own failures are 125
     if argv[:1] == ["run"]:   # parsed on its own: its usage errors must not exit 2 like a command's
         return run.main(argv[1:])
     parser = build_parser()

@@ -128,10 +128,12 @@ qq run --list                              # list saved commands; --show NAME pr
 rather than whatever is installed. A toolchain counts only when its link points at the store entry
 for the digest pinned now: after a pin moves, the old one is not used, and a toolchain directory
 committed to the repo never lands on `PATH`. A pinned toolchain that is not synced at its pin is
-named on stderr and taken from `PATH`; run `qq sync`. Toolchains are published for Linux only so
-far, so on a Mac `qq run` runs the command with your own tools and names the pins it could not
-use. CI does not use these pins yet (it installs its tools with GitHub's setup actions), so a
-patch version can differ between `qq run` and CI.
+named on stderr and taken from `PATH`; run `qq sync`. Toolchains are published for linux-x86_64
+only so far, so elsewhere (a Mac, an arm64 machine) `qq run` runs the command with your own tools
+and names the pins it could not use. CI does not use these pins yet: it installs Node and Python
+with GitHub's setup actions, so the patch release can differ, and it installs pnpm 10
+(`npm install --global pnpm@10`) where the pinned Node toolchain bundles pnpm 11.28.2. Exact
+local and CI parity is v1.
 
 qq then becomes the command (exec), so its exit code, signals and terminal are the command's own.
 When qq itself fails (bad usage, no repo, a broken saved command) it exits 125, so its errors never
@@ -143,15 +145,17 @@ Saved commands are POSIX shell scripts at `infra/commands/<name>.sh`, committed 
 agents run the same thing. `--save` writes one (`--force` replaces it); you can also write or edit
 one by hand. Saved from several words, each stays one word and the arguments given when it runs
 are passed on after them (`"$@"`). Saved from one argument, the command line is kept as typed;
-add `"$@"` where arguments should go, since qq refuses to run a saved command with arguments it
-never reads rather than drop them. A name is lowercase letters, digits, `-` and `_`, so it can
+add `"$@"` where arguments should go, since qq refuses to run a saved command with arguments when
+the script never mentions them (outside quotes and comments) rather than drop them. It checks for
+a mention only: a function's own `$1` or a heredoc counts too. A name is lowercase letters, digits, `-` and `_`, so it can
 never be a path or shell syntax, and arguments are never read as shell code. When the first word
 is a saved command's name, that command runs and qq says so on stderr; put `--` first to run a
 program of the same name instead.
 
 A saved command is code in the repo, like any script there. qq runs one only when you name it,
 never from `qq sync`, `qq build` or `qq test`. `qq run --show NAME` prints it with control
-characters written as `\xNN`, so what you read is what runs; read it before running one from a
+characters and bytes that are not UTF-8 written as `\xNN` (and a backslash as `\\`), so what you
+read is what runs; read it before running one from a
 repo you do not trust. CI does not run saved commands yet.
 
 A repo that pins `[qq] version = "0.1.0"` (xo-space and innernet do) runs the `qq` of your depot

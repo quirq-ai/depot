@@ -258,6 +258,9 @@ def test_show_makes_control_characters_visible(repo, capfd):
     (repo / "infra" / "commands" / "e.sh").write_bytes(b"echo safe\x1b[2K\rrm -rf x\r\n\tnext\xff\n")
     assert cli.main(["run", "--show", "e"]) == 0
     assert capfd.readouterr().out == "echo safe\\x1b[2K\\x0drm -rf x\\x0d\n\tnext\\xff\n"
+    (repo / "infra" / "commands" / "e.sh").write_bytes(b"echo \\x1b \x1b\n")
+    assert cli.main(["run", "--show", "e"]) == 0
+    assert capfd.readouterr().out == "echo \\\\x1b \\x1b\n"
 
 
 def test_several_saved_words_pass_on_run_arguments(repo):
@@ -271,7 +274,7 @@ def test_run_arguments_are_never_dropped(repo):
     assert qq("run", "fixed").stdout == "fixed\n"
     r = qq("run", "fixed", "--fast")
     assert r.returncode == 125
-    assert "never reads its arguments" in r.stderr and "--fast" in r.stderr and r.stdout == ""
+    assert "never mentions its arguments" in r.stderr and "--fast" in r.stderr and r.stdout == ""
     assert cli.main(["run", "--save", "takes", 'echo "got ${1}"']) == 0
     assert qq("run", "takes", "--fast").stdout == "got --fast\n"
 
@@ -295,13 +298,61 @@ def test_broken_commands_dir_points_at_double_dash(repo, capfd):
     assert qq("run", "--", "true").returncode == 0
 
 
-def test_not_synced_note_names_linux_only_off_linux(repo, tmp_path, monkeypatch, capfd):
+def test_not_synced_note_names_the_one_built_platform(repo, tmp_path, monkeypatch, capfd):
     pin_hello(repo, tmp_path)
     from qqdepot.commands import run
     root = repo
-    monkeypatch.setattr(run.sys, "platform", "linux")
-    run.environment(root)
-    assert "Linux only" not in capfd.readouterr().err
-    monkeypatch.setattr(run.sys, "platform", "darwin")
-    run.environment(root)
-    assert "Linux only" in capfd.readouterr().err
+    for platform, noted in (("linux-x86_64", False), ("linux-arm64", True), ("macos-arm64", True)):
+        monkeypatch.setattr(run.pins, "current_platform", lambda: platform)
+        run.environment(root)
+        assert ("published for linux-x86_64 only" in capfd.readouterr().err) == noted
+
+
+@pytest.mark.parametrize("script, mentions", [
+    ('echo "$@"', True), ("echo $1", True), ("echo ${1:-x}", True), ("echo $*", True),
+    ("[ $# -gt 0 ]", True), ("echo ${@}", True),
+    ("awk '{print $1}'", False), ("awk '{\n print $1\n}' f", False), ("n=${#v}", False),
+    ("cmd # was $1", False), ("echo \\$1", False), ("# $1\ncmd", False),
+    ("cmd # x\fy $1", False), ("cmd # x\u2028 $1", False), ("echo a#$1", True), ('echo "#$1"', True),
+])
+def test_mentions_arguments(script, mentions):
+    from qqdepot.commands import run
+    assert run.mentions_arguments(script) is mentions
+
+
+def test_awk_field_is_not_an_argument(repo):
+    assert cli.main(["run", "--save", "f", "echo a b | awk '{print $1}'"]) == 0
+    r = qq("run", "f", "--fast")
+    assert r.returncode == 125 and "never mentions its arguments" in r.stderr
+
+
+def test_broken_pin_under_qq_run_is_125(repo, monkeypatch):
+    (repo / "infra" / "repo.toml").write_text('schema = "quirq-repo/1"\n[qq]\nversion = "not a version"\n')
+    env = {**os.environ}
+    env.pop("QQ_PINNED", None)
+    r = subprocess.run([sys.executable, "-m", "qqdepot.cli", "run", "true"], capture_output=True, text=True, env=env)
+    assert r.returncode == 125, r.stderr
+    r = subprocess.run([sys.executable, "-m", "qqdepot.cli", "sync"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+
+
+def test_dash_command_line_is_not_a_shell_option(repo):
+    r = qq("run", "--", "-x")
+    assert r.returncode == 127 and "-x: not found" in r.stderr
+
+
+def test_unreadable_commands_dir_is_an_error(repo):
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "true.sh").write_text("echo saved\n")
+    (repo / "infra" / "commands").chmod(0)
+    try:
+        try:
+            os.lstat(repo / "infra" / "commands" / "true.sh")
+            pytest.skip("this user reads any directory (root)")
+        except PermissionError:
+            pass
+        r = qq("run", "true")
+        assert r.returncode == 125 and "cannot read" in r.stderr and "put -- first" in r.stderr
+        assert qq("run", "--", "true").returncode == 0
+    finally:
+        (repo / "infra" / "commands").chmod(0o755)

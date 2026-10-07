@@ -22,10 +22,12 @@ import argparse
 import os
 import re
 import shlex
+import stat
 import sys
 import tempfile
 from pathlib import Path
 
+from qqsync import pins
 from qqsync.errors import ManifestError
 from qqsync.manifest import load
 
@@ -38,8 +40,9 @@ COMMANDS = Path("infra/commands")
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 SHELL = "/bin/sh"
 QQ_FAILED = 125   # qq's own failure, as env and timeout use it; 126 and 127 as a shell does
-# A script that reads its arguments: "$@", $*, $#, $1-$9, or their ${...} forms.
-USES_ARGS = re.compile(r"\$\{?[@*#1-9]")
+# A mention of the script's arguments: "$@", $*, $#, $1-$9, or ${@}, ${*}, ${1}... (not ${#name}).
+ARGUMENT = re.compile(r"\$(?:[@*#1-9]|\{[@*1-9])")
+BUILT_FOR = "linux-x86_64"   # the only platform toolchains are published for so far
 HEADER = ("#!/bin/sh\n"
           "# Saved with `qq run --save {name}`; run it with `qq run {name} [ARG ...]`.\n"
           "# It runs from the repo root with the repo's pinned toolchains first on PATH;\n"
@@ -57,18 +60,30 @@ def check_name(name: str) -> str:
     return name
 
 
+def _lstat(path: Path) -> os.stat_result | None:
+    """`path`'s own status, or None when it does not exist. Any other failure (no permission) is
+    an error: Path.exists() would report it as missing, and qq would run something else."""
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise RunError(f"cannot read {path}: {e.strerror}") from None
+
+
 def _commands_dir(root: Path, make: bool = False) -> Path | None:
     """<root>/infra/commands as a real directory in the repo, or None when it does not exist."""
     path = root
     for part in COMMANDS.parts:
         path = path / part
-        if path.is_symlink():
-            raise RunError(f"{path} is a symlink; saved commands must live in the repo itself")
-        if not path.exists():
+        st = _lstat(path)
+        if st is None:
             if not make:
                 return None
             path.mkdir()
-        elif not path.is_dir():
+        elif stat.S_ISLNK(st.st_mode):
+            raise RunError(f"{path} is a symlink; saved commands must live in the repo itself")
+        elif not stat.S_ISDIR(st.st_mode):
             raise RunError(f"{path} is not a directory")
     return path
 
@@ -79,11 +94,12 @@ def saved_path(root: Path, name: str) -> Path | None:
     if directory is None:
         return None
     path = directory / f"{check_name(name)}.sh"
-    if path.is_symlink():
-        raise RunError(f"{path} is a symlink; a saved command must be a file in the repo")
-    if not path.exists():
+    st = _lstat(path)
+    if st is None:
         return None
-    if not path.is_file():
+    if stat.S_ISLNK(st.st_mode):
+        raise RunError(f"{path} is a symlink; a saved command must be a file in the repo")
+    if not stat.S_ISREG(st.st_mode):
         raise RunError(f"{path} is not a file")
     return path
 
@@ -92,8 +108,12 @@ def saved_names(root: Path) -> list[str]:
     directory = _commands_dir(root)
     if directory is None:
         return []
-    return sorted(p.stem for p in directory.glob("*.sh")
-                  if NAME.fullmatch(p.stem) and p.is_file() and not p.is_symlink())
+    try:
+        entries = list(os.scandir(directory))
+    except OSError as e:
+        raise RunError(f"cannot read {directory}: {e.strerror}") from None
+    return sorted(e.name[:-3] for e in entries
+                  if e.name.endswith(".sh") and NAME.fullmatch(e.name[:-3]) and e.is_file(follow_symlinks=False))
 
 
 def toolchain_bins(root: Path) -> tuple[list[str], list[str]]:
@@ -125,7 +145,7 @@ def toolchain_bins(root: Path) -> tuple[list[str], list[str]]:
 def environment(root: Path) -> dict[str, str]:
     bins, missing = toolchain_bins(root)
     if missing:
-        note = "" if sys.platform == "linux" else " (toolchains are published for Linux only so far)"
+        note = "" if pins.current_platform() == BUILT_FOR else f" (toolchains are published for {BUILT_FOR} only so far)"
         print(f"qq: not synced here: {', '.join(missing)}; using PATH for them. Run qq sync{note}",
               file=sys.stderr)
     env = dict(os.environ)
@@ -190,19 +210,46 @@ def _umask() -> int:
 
 
 def visible(text: str, keep: str = "") -> str:
-    """`text` with control characters (terminal escapes, carriage returns) written as \\xNN, so
-    what is shown is what runs. Characters in `keep` stay as they are."""
-    return "".join(c if c.isprintable() or c in keep else f"\\x{ord(c):02x}" if ord(c) < 0x100
+    """`text` with control characters (terminal escapes, carriage returns) and bytes that are not
+    UTF-8 written as \\xNN and a backslash as \\\\, so what is shown is what runs. Characters in
+    `keep` stay as they are."""
+    return "".join("\\\\" if c == "\\" else c if c.isprintable() or c in keep
+                   else f"\\x{ord(c) & 0xff:02x}" if ord(c) < 0x100 or 0xdc80 <= ord(c) <= 0xdcff
                    else f"\\u{ord(c):04x}" for c in text)
 
 
 def _read(path: Path) -> str:
-    return path.read_bytes().decode("utf-8", errors="backslashreplace")
+    return path.read_bytes().decode("utf-8", errors="surrogateescape")   # bytes that are not UTF-8 too
 
 
-def _reads_arguments(script: str) -> bool:
-    """True when a line of the script other than a comment reads its arguments."""
-    return any(USES_ARGS.search(line) for line in script.splitlines() if not line.lstrip().startswith("#"))
+def mentions_arguments(script: str) -> bool:
+    """True when the script mentions its arguments outside single quotes, comments and backslash
+    escapes. Only a mention: a function's own $1 or a heredoc cannot be told apart by reading."""
+    i, in_double, word_start = 0, False, True
+    while i < len(script):
+        c = script[i]
+        if c == "\\":
+            i, word_start = i + 2, False
+            continue
+        if c == "'" and not in_double:
+            end = script.find("'", i + 1)
+            if end < 0:
+                return False
+            i, word_start = end + 1, False
+            continue
+        if c == '"':
+            in_double = not in_double
+        elif c == "#" and word_start and not in_double:
+            end = script.find("\n", i)   # a comment ends at a newline, nothing else
+            if end < 0:
+                return False
+            i, word_start = end + 1, True
+            continue
+        elif c == "$" and ARGUMENT.match(script, i):
+            return True
+        word_start = c in " \t\n;|&()"
+        i += 1
+    return False
 
 
 def _summary(path: Path) -> str:
@@ -246,14 +293,14 @@ def run_command(args: argparse.Namespace) -> int:
         except RunError as e:
             raise RunError(f"{e} (put -- first to run a program without looking up saved commands)") from None
         if path is not None:
-            if words[1:] and not _reads_arguments(_read(path)):
-                raise RunError(f"saved command {words[0]} never reads its arguments (\"$@\"), so"
+            if words[1:] and not mentions_arguments(_read(path)):
+                raise RunError(f"saved command {words[0]} never mentions its arguments (\"$@\"), so"
                                f" {shlex.join(words[1:])} would be dropped; add \"$@\" where they go in"
                                f" {path.relative_to(root)}")
             print(f"qq: running saved command {words[0]} ({path.relative_to(root)})", file=sys.stderr)
             argv = [SHELL, str(path), *words[1:]]
         elif len(words) == 1:
-            argv = [SHELL, "-c", words[0]]
+            argv = [SHELL, "-c", "--", words[0]]
         else:
             argv = words
         return execute(argv, root, environment(root))
