@@ -1,4 +1,4 @@
-"""qq run: a command, or a saved one, runs from the repo root with the repo's pinned toolchains."""
+"""qq run, qq create and qq NAME: commands run from the repo root with the repo's pinned toolchains."""
 import hashlib
 import io
 import os
@@ -90,16 +90,6 @@ def test_nothing_to_run(repo, capfd):
     assert "nothing to run" in capfd.readouterr().err
 
 
-@pytest.mark.parametrize("argv, message", [
-    (["--force", "true"], "--force only goes with --save"),
-    (["--list", "x"], "take no command"),
-    (["--show", "x", "y"], "take no command"),
-])
-def test_option_misuse(repo, capfd, argv, message):
-    assert cli.main(["run", *argv]) == 125
-    assert message in capfd.readouterr().err
-
-
 def test_no_abbreviated_options(repo, capfd):
     r = qq("run", "--sav", "x", "true")
     assert r.returncode == 125
@@ -155,134 +145,14 @@ def test_toolchain_link_loop_is_not_synced(repo, tmp_path):
     assert "not synced here: hello" in r.stderr
 
 
-def test_save_list_show_and_run(repo, capfd):
-    assert cli.main(["run", "--save", "greet", 'echo "hi $1 from $(basename "$PWD")"']) == 0
-    script = repo / "infra" / "commands" / "greet.sh"
-    assert script.read_text().startswith("#!/bin/sh\n")
-    assert script.stat().st_mode & stat.S_IXUSR
-    capfd.readouterr()
-
-    r = qq("run", "greet", "you")
-    assert (r.returncode, r.stdout.strip()) == (0, "hi you from repo")
-    assert "running saved command greet (infra/commands/greet.sh)" in r.stderr
-
-    assert cli.main(["run", "--list"]) == 0
-    assert capfd.readouterr().out == 'greet\techo "hi $1 from $(basename "$PWD")"\n'
-    assert cli.main(["run", "--show", "greet"]) == 0
-    assert capfd.readouterr().out == script.read_text()
-
-
-def test_list_hides_terminal_escapes(repo, capfd):
-    (repo / "infra" / "commands").mkdir()
-    (repo / "infra" / "commands" / "e.sh").write_text("echo \x1b]0;title\x07 hi\n")
-    assert cli.main(["run", "--list"]) == 0
-    assert capfd.readouterr().out == "e\techo \\x1b]0;title\\x07 hi\n"
-
-
-def test_double_dash_skips_saved_commands(repo, capfd):
-    assert cli.main(["run", "--save", "printf", 'echo SAVED "$@"']) == 0
-    assert qq("run", "printf", "x").stdout == "SAVED x\n"
-    r = qq("run", "--", "printf", "x")
-    assert (r.stdout, r.stderr) == ("x", "")
-
-
-def test_save_several_words_keeps_each_word(repo):
-    assert cli.main(["run", "--save", "p", "printf", "%s|", "a b", "$HOME"]) == 0
-    r = qq("run", "p")
-    assert (r.returncode, r.stdout) == (0, "a b|$HOME|")
-
-
-def test_saved_command_arguments_are_not_shell_code(repo, tmp_path):
-    assert cli.main(["run", "--save", "echoes", 'printf "%s\\n" "$@"']) == 0
-    marker = tmp_path / "pwned"
-    r = qq("run", "echoes", f"; touch {marker}", f"$(touch {marker})")
-    assert r.returncode == 0
-    assert not marker.exists()
-    assert r.stdout.splitlines() == [f"; touch {marker}", f"$(touch {marker})"]
-
-
-def test_save_refuses_overwrite_without_force(repo, capfd):
-    assert cli.main(["run", "--save", "t", "echo one"]) == 0
-    assert cli.main(["run", "--save", "t", "echo two"]) == 125
-    assert "--force" in capfd.readouterr().err
-    assert cli.main(["run", "--save", "t", "--force", "echo two"]) == 0
-    assert qq("run", "t").stdout.strip() == "two"
-
-
-@pytest.mark.parametrize("name", ["../x", "a/b", "A", "-x", "x;y", "$(id)", "", "a" * 65, "x.sh"])
-def test_bad_names_are_refused(repo, capfd, name):
-    assert cli.main(["run", f"--save={name}", "true"]) == 125
-    assert "not a command name" in capfd.readouterr().err
-    assert not (repo / "infra" / "commands").exists() or not any((repo / "infra" / "commands").iterdir())
-
-
-def test_show_unknown(repo, capfd):
-    assert cli.main(["run", "--show", "nope"]) == 125
-    assert "no saved command 'nope'" in capfd.readouterr().err
-
-
-def test_symlinked_commands_are_refused(repo, tmp_path, capfd):
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "x.sh").write_text("echo outside\n")
-    os.symlink(outside, repo / "infra" / "commands")
-    assert cli.main(["run", "x"]) == 125
-    assert "is a symlink" in capfd.readouterr().err
-
-    (repo / "infra" / "commands").unlink()
-    (repo / "infra" / "commands").mkdir()
-    os.symlink(outside / "x.sh", repo / "infra" / "commands" / "x.sh")
-    assert cli.main(["run", "x"]) == 125
-    assert "is a symlink" in capfd.readouterr().err
-    assert cli.main(["run", "--list"]) == 0
-    assert capfd.readouterr().out == ""
-
-
-def test_an_unsaved_word_runs_as_a_command(repo):
-    assert qq("run", "true").returncode == 0
-    assert qq("run", "false").returncode == 1
-
-
-@pytest.mark.parametrize("argv", [["--save"], ["-x"], ["--"], [""], ["  "], ["--show"]])
-def test_qq_usage_errors_exit_125(repo, argv):
-    r = qq("run", *argv)
-    assert r.returncode == 125, r.stderr
-
-
 def test_a_command_exiting_2_is_not_a_qq_error(repo):
     assert qq("run", "exit 2").returncode == 2
 
 
-def test_show_makes_control_characters_visible(repo, capfd):
-    (repo / "infra" / "commands").mkdir()
-    (repo / "infra" / "commands" / "e.sh").write_bytes(b"echo safe\x1b[2K\rrm -rf x\r\n\tnext\xff\n")
-    assert cli.main(["run", "--show", "e"]) == 0
-    assert capfd.readouterr().out == "echo safe\\x1b[2K\\x0drm -rf x\\x0d\n\tnext\\xff\n"
-    (repo / "infra" / "commands" / "e.sh").write_bytes(b"echo \\x1b \x1b\n")
-    assert cli.main(["run", "--show", "e"]) == 0
-    assert capfd.readouterr().out == "echo \\\\x1b \\x1b\n"
-
-
-def test_several_saved_words_pass_on_run_arguments(repo):
-    assert cli.main(["run", "--save", "p", "printf", "%s|", "a"]) == 0
-    assert (repo / "infra" / "commands" / "p.sh").read_text().endswith("printf '%s|' a \"$@\"\n")
-    assert qq("run", "p", "b c", "$HOME").stdout == "a|b c|$HOME|"
-
-
-def test_run_arguments_are_never_dropped(repo):
-    assert cli.main(["run", "--save", "fixed", "echo fixed"]) == 0
-    assert qq("run", "fixed").stdout == "fixed\n"
-    r = qq("run", "fixed", "--fast")
-    assert r.returncode == 125
-    assert "never mentions its arguments" in r.stderr and "--fast" in r.stderr and r.stdout == ""
-    assert cli.main(["run", "--save", "takes", 'echo "got ${1}"']) == 0
-    assert qq("run", "takes", "--fast").stdout == "got --fast\n"
-
-
-def test_non_utf8_save_is_refused(repo, capfd):
-    bad = b"echo \xff".decode("utf-8", "surrogateescape")
-    assert cli.main(["run", "--save", "bad", bad]) == 125
-    assert "not valid UTF-8" in capfd.readouterr().err
+@pytest.mark.parametrize("argv", [["-x"], ["--"], [""], ["  "], ["--save", "x", "true"]])
+def test_qq_run_usage_errors_exit_125(repo, argv):
+    r = qq("run", *argv)
+    assert r.returncode == 125, r.stderr
 
 
 def test_quoted_command_line_with_more_words_hints(repo):
@@ -291,21 +161,74 @@ def test_quoted_command_line_with_more_words_hints(repo):
     assert "one quoted argument" in r.stderr and "qq run 'ls -la foo'" in r.stderr
 
 
-def test_broken_commands_dir_points_at_double_dash(repo, capfd):
-    (repo / "infra" / "commands").write_text("not a dir")
-    assert cli.main(["run", "true"]) == 125
-    assert "put -- first" in capfd.readouterr().err
-    assert qq("run", "--", "true").returncode == 0
+def test_dash_command_line_is_not_a_shell_option(repo):
+    r = qq("run", "--", "-x")
+    assert r.returncode == 127 and "-x: not found" in r.stderr
 
 
 def test_not_synced_note_names_the_one_built_platform(repo, tmp_path, monkeypatch, capfd):
     pin_hello(repo, tmp_path)
     from qqdepot.commands import run
-    root = repo
     for platform, noted in (("linux-x86_64", False), ("linux-arm64", True), ("macos-arm64", True)):
         monkeypatch.setattr(run.pins, "current_platform", lambda: platform)
-        run.environment(root)
+        run.environment(repo)
         assert ("published for linux-x86_64 only" in capfd.readouterr().err) == noted
+
+
+def test_broken_pin_is_125_for_qq_run_and_repo_commands(repo):
+    assert cli.main(["create", "space", "true"]) == 0
+    (repo / "infra" / "repo.toml").write_text('schema = "quirq-repo/1"\n[qq]\nversion = "not a version"\n')
+    env = {**os.environ}
+    env.pop("QQ_PINNED", None)
+    for argv, code in ((["run", "true"], 125), (["space"], 125), (["sync"], 2)):
+        r = subprocess.run([sys.executable, "-m", "qqdepot.cli", *argv], capture_output=True, text=True, env=env)
+        assert r.returncode == code, (argv, r.stderr)
+
+
+# qq create NAME and qq NAME: a repo's own commands, run like qq's.
+
+def test_create_then_run_like_any_qq_command(repo, capfd):
+    assert cli.main(["create", "greet", 'echo "hi $1 from $(basename "$PWD")"']) == 0
+    assert "created qq greet (infra/commands/greet.sh)" in capfd.readouterr().out
+    script = repo / "infra" / "commands" / "greet.sh"
+    assert script.read_text().startswith("#!/bin/sh\n# Created with `qq create greet`")
+    assert script.stat().st_mode & stat.S_IXUSR
+    r = qq("greet", "you")
+    assert (r.returncode, r.stdout.strip(), r.stderr) == (0, "hi you from repo", "")
+
+
+def test_qq_name_becomes_the_command(repo):
+    assert cli.main(["create", "die", "kill -TERM $$"]) == 0
+    assert qq("die").returncode == -15
+    assert cli.main(["create", "two", "exit 2"]) == 0
+    assert qq("two").returncode == 2
+
+
+def test_create_from_several_words_passes_arguments_on(repo):
+    assert cli.main(["create", "p", "printf", "%s|", "a b", "$HOME"]) == 0
+    assert (repo / "infra" / "commands" / "p.sh").read_text().endswith("printf '%s|' 'a b' '$HOME' \"$@\"\n")
+    r = qq("p", "c d", "$(id)")
+    assert (r.returncode, r.stdout) == (0, "a b|$HOME|c d|$(id)|")
+
+
+def test_arguments_are_not_shell_code(repo, tmp_path):
+    assert cli.main(["create", "echoes", 'printf "%s\\n" "$@"']) == 0
+    marker = tmp_path / "pwned"
+    r = qq("echoes", f"; touch {marker}", f"$(touch {marker})")
+    assert r.returncode == 0 and not marker.exists()
+    assert r.stdout.splitlines() == [f"; touch {marker}", f"$(touch {marker})"]
+
+
+def test_arguments_are_never_dropped(repo):
+    assert cli.main(["create", "fixed", "echo fixed"]) == 0
+    assert qq("fixed").stdout == "fixed\n"
+    r = qq("fixed", "--fast")
+    assert r.returncode == 125 and r.stdout == ""
+    assert "never mentions its arguments" in r.stderr and "--fast" in r.stderr
+    assert cli.main(["create", "takes", 'echo "got ${1}"']) == 0
+    assert qq("takes", "--fast").stdout == "got --fast\n"
+    assert cli.main(["create", "f", "echo a b | awk '{print $1}'"]) == 0
+    assert qq("f", "--fast").returncode == 125
 
 
 @pytest.mark.parametrize("script, mentions", [
@@ -320,39 +243,93 @@ def test_mentions_arguments(script, mentions):
     assert run.mentions_arguments(script) is mentions
 
 
-def test_awk_field_is_not_an_argument(repo):
-    assert cli.main(["run", "--save", "f", "echo a b | awk '{print $1}'"]) == 0
-    r = qq("run", "f", "--fast")
-    assert r.returncode == 125 and "never mentions its arguments" in r.stderr
+def test_create_refuses_overwrite_without_force(repo, capfd):
+    assert cli.main(["create", "t", "echo one"]) == 0
+    assert cli.main(["create", "t", "echo two"]) == 125
+    assert "--force" in capfd.readouterr().err
+    assert cli.main(["create", "--force", "t", "echo two"]) == 0
+    assert qq("t").stdout.strip() == "two"
 
 
-def test_broken_pin_under_qq_run_is_125(repo, monkeypatch):
-    (repo / "infra" / "repo.toml").write_text('schema = "quirq-repo/1"\n[qq]\nversion = "not a version"\n')
-    env = {**os.environ}
-    env.pop("QQ_PINNED", None)
-    r = subprocess.run([sys.executable, "-m", "qqdepot.cli", "run", "true"], capture_output=True, text=True, env=env)
-    assert r.returncode == 125, r.stderr
-    r = subprocess.run([sys.executable, "-m", "qqdepot.cli", "sync"], capture_output=True, text=True, env=env)
-    assert r.returncode == 2
+@pytest.mark.parametrize("name", ["sync", "fetch", "build", "test", "land", "status", "run", "create"])
+def test_qq_commands_cannot_be_taken(repo, capfd, name):
+    assert cli.main(["create", name, "echo hijacked"]) == 125
+    assert "already a qq command" in capfd.readouterr().err
+    assert not (repo / "infra" / "commands" / f"{name}.sh").exists()
 
 
-def test_dash_command_line_is_not_a_shell_option(repo):
-    r = qq("run", "--", "-x")
-    assert r.returncode == 127 and "-x: not found" in r.stderr
+def test_a_committed_script_never_shadows_a_qq_command(repo):
+    (repo / "infra" / "commands").mkdir()
+    (repo / "infra" / "commands" / "status.sh").write_text("echo hijacked\n")
+    r = qq("status", "--help")
+    assert "hijacked" not in r.stdout and "usage: qq status" in r.stdout
+
+
+@pytest.mark.parametrize("name", ["../x", "a/b", "A", "-x", "x;y", "$(id)", "", "a" * 65, "x.sh"])
+def test_bad_names_are_refused(repo, capfd, name):
+    assert cli.main(["create", "--", name, "true"] if name.startswith("-") else ["create", name, "true"]) in (2, 125)
+    assert not (repo / "infra" / "commands").exists() or not any((repo / "infra" / "commands").iterdir())
+
+
+def test_non_utf8_create_is_refused(repo, capfd):
+    bad = b"echo \xff".decode("utf-8", "surrogateescape")
+    assert cli.main(["create", "bad", bad]) == 125
+    assert "not valid UTF-8" in capfd.readouterr().err
+
+
+def test_create_needs_a_command(repo, capfd):
+    assert cli.main(["create", "empty"]) == 125
+    assert "nothing to create" in capfd.readouterr().err
+
+
+def test_help_lists_the_repo_commands_visibly(repo):
+    assert cli.main(["create", "space", "./scripts/space --all"]) == 0
+    (repo / "infra" / "commands" / "e.sh").write_bytes(b"echo \x1b]0;t\x07 \\x1b\n")
+    out = qq("--help").stdout
+    assert "this repo's commands (qq create NAME COMMAND adds one):" in out
+    assert "  space  ./scripts/space --all \"$@\"" not in out   # one argument: kept as typed
+    assert "  space  ./scripts/space --all" in out
+    assert "  e      echo \\x1b]0;t\\x07 \\\\x1b" in out
+
+
+def test_unknown_name_is_still_an_error(repo):
+    r = qq("nope")
+    assert r.returncode == 2 and "invalid choice: 'nope'" in r.stderr
+
+
+def test_outside_a_repo_a_name_is_not_looked_up(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    r = qq("space")
+    assert r.returncode == 2 and "invalid choice" in r.stderr
+
+
+def test_symlinked_commands_are_refused(repo, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.sh").write_text("echo outside\n")
+    os.symlink(outside, repo / "infra" / "commands")
+    r = qq("x")
+    assert r.returncode == 125 and "is a symlink" in r.stderr
+    (repo / "infra" / "commands").unlink()
+    (repo / "infra" / "commands").mkdir()
+    os.symlink(outside / "x.sh", repo / "infra" / "commands" / "x.sh")
+    r = qq("x")
+    assert r.returncode == 125 and "is a symlink" in r.stderr
+    assert "outside" not in qq("--help").stdout
+    assert qq("run", "true").returncode == 0   # qq run never looks at infra/commands
 
 
 def test_unreadable_commands_dir_is_an_error(repo):
     (repo / "infra" / "commands").mkdir()
-    (repo / "infra" / "commands" / "true.sh").write_text("echo saved\n")
+    (repo / "infra" / "commands" / "x.sh").write_text("echo saved\n")
     (repo / "infra" / "commands").chmod(0)
     try:
         try:
-            os.lstat(repo / "infra" / "commands" / "true.sh")
+            os.lstat(repo / "infra" / "commands" / "x.sh")
             pytest.skip("this user reads any directory (root)")
         except PermissionError:
             pass
-        r = qq("run", "true")
-        assert r.returncode == 125 and "cannot read" in r.stderr and "put -- first" in r.stderr
-        assert qq("run", "--", "true").returncode == 0
+        r = qq("x")
+        assert r.returncode == 125 and "cannot read" in r.stderr
     finally:
         (repo / "infra" / "commands").chmod(0o755)

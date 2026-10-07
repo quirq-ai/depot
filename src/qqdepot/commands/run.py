@@ -1,20 +1,17 @@
-"""qq run: run a command, or a saved one, in the repo's qq environment.
+"""qq run and a repo's own commands: run a command in the repo's qq environment.
 
-    qq run "COMMAND LINE"          run it with /bin/sh
-    qq run NAME [ARG ...]          run the saved command infra/commands/NAME.sh with these arguments
-    qq run PROGRAM [ARG ...]       run PROGRAM directly, with no shell in between
-    qq run -- PROGRAM [ARG ...]    the same, even when a saved command is named PROGRAM
-    qq run --save NAME COMMAND...  save a command as infra/commands/NAME.sh, to commit with the repo
-    qq run --list                  list the saved commands
-    qq run --show NAME             print one
+    qq run "COMMAND LINE"          run it once, with /bin/sh
+    qq run PROGRAM [ARG ...]       run PROGRAM once, directly, with no shell in between
+    qq create NAME COMMAND...      make NAME a qq command of this repo (infra/commands/NAME.sh)
+    qq NAME [ARG ...]              run it, like any other qq command
 
 Every command runs from the repo root. The bin directory of each toolchain `qq sync` linked under
 <repo>/.qq/toolchains comes first on PATH, so the command runs the versions the repo pins. qq then
 becomes the command (exec), so its exit code and signals are the command's own. When qq itself
-fails (bad usage, no repo, a broken saved command) it exits 125; a command that cannot start
-gives 127 (not found) or 126 (not runnable), as a shell does.
+fails (bad usage, no repo, a broken command file) it exits 125; a command that cannot start gives
+127 (not found) or 126 (not runnable), as a shell does.
 
-A saved command is code in the repo, like any script there: qq runs one only when you name it.
+A repo's command is code in the repo, like any script there: qq runs one only when you name it.
 """
 from __future__ import annotations
 
@@ -44,7 +41,7 @@ QQ_FAILED = 125   # qq's own failure, as env and timeout use it; 126 and 127 as 
 ARGUMENT = re.compile(r"\$(?:[@*#1-9]|\{[@*1-9])")
 BUILT_FOR = "linux-x86_64"   # the only platform toolchains are published for so far
 HEADER = ("#!/bin/sh\n"
-          "# Saved with `qq run --save {name}`; run it with `qq run {name} [ARG ...]`.\n"
+          "# Created with `qq create {name}`; run it with `qq {name} [ARG ...]`.\n"
           "# It runs from the repo root with the repo's pinned toolchains first on PATH;\n"
           "# arguments given after the name reach it as \"$@\".\n")
 
@@ -82,14 +79,14 @@ def _commands_dir(root: Path, make: bool = False) -> Path | None:
                 return None
             path.mkdir()
         elif stat.S_ISLNK(st.st_mode):
-            raise RunError(f"{path} is a symlink; saved commands must live in the repo itself")
+            raise RunError(f"{path} is a symlink; a repo's commands must live in the repo itself")
         elif not stat.S_ISDIR(st.st_mode):
             raise RunError(f"{path} is not a directory")
     return path
 
 
 def saved_path(root: Path, name: str) -> Path | None:
-    """The saved command NAME's script, or None when there is none."""
+    """The repo command NAME's script, or None when there is none."""
     directory = _commands_dir(root)
     if directory is None:
         return None
@@ -98,7 +95,7 @@ def saved_path(root: Path, name: str) -> Path | None:
     if st is None:
         return None
     if stat.S_ISLNK(st.st_mode):
-        raise RunError(f"{path} is a symlink; a saved command must be a file in the repo")
+        raise RunError(f"{path} is a symlink; a repo's command must be a file in the repo")
     if not stat.S_ISREG(st.st_mode):
         raise RunError(f"{path} is not a file")
     return path
@@ -174,22 +171,32 @@ def execute(argv: list[str], root: Path, env: dict[str, str]) -> int:
         return 126
 
 
+def qq_commands() -> set[str]:
+    """The names qq itself answers to (builtins and plugins): a repo's command never takes one."""
+    from qqdepot import cli   # cli imports this module
+    return set(cli.build_parser().qq_commands)
+
+
 def save(root: Path, name: str, words: list[str], force: bool) -> Path:
+    """Write the repo command NAME (`qq create`)."""
     check_name(name)
+    if name in qq_commands():
+        raise RunError(f"{name!r} is already a qq command (qq {name}); pick another name")
     if not words:
-        raise RunError(f"nothing to save: qq run --save {name} COMMAND")
+        raise RunError(f"nothing to create: qq create {name} COMMAND")
     # One argument is a command line, kept as typed. Several are quoted so each stays one word,
     # and the arguments given when it runs are passed on after them.
     line = words[0] if len(words) == 1 else shlex.join(words) + ' "$@"'
     if not line.strip():
-        raise RunError(f"nothing to save: qq run --save {name} COMMAND")
+        raise RunError(f"nothing to create: qq create {name} COMMAND")
     try:
         line.encode()
     except UnicodeEncodeError:
-        raise RunError("the command is not valid UTF-8; saved commands are UTF-8 text") from None
+        raise RunError("the command is not valid UTF-8; a repo's commands are UTF-8 text") from None
     directory = _commands_dir(root, make=True)
     path = directory / f"{name}.sh"
-    if path.is_symlink() or (path.exists() and not force):
+    st = _lstat(path)
+    if st is not None and (stat.S_ISLNK(st.st_mode) or not force):
         raise RunError(f"{path.relative_to(root)} already exists; pass --force to replace it")
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{name}.")
     try:
@@ -260,49 +267,44 @@ def _summary(path: Path) -> str:
     return ""
 
 
+def repo_commands() -> list[tuple[str, str]]:
+    """(name, first command line) for each command of the repo here, for qq --help; none outside
+    a repo or when infra/commands cannot be read."""
+    root = repo_root(Path.cwd())
+    try:
+        return [] if root is None else [(n, _summary(root / COMMANDS / f"{n}.sh")) for n in saved_names(root)]
+    except (RunError, OSError):
+        return []
+
+
+def run_saved(name: str, arguments: list[str]) -> int | None:
+    """`qq NAME ARG...` for the repo command NAME, or None when the repo here has none by that name."""
+    root = repo_root(Path.cwd())
+    if root is None or not NAME.fullmatch(name):
+        return None
+    try:
+        path = saved_path(root, name)
+        if path is None:
+            return None
+        if arguments and not mentions_arguments(_read(path)):
+            raise RunError(f"qq {name} never mentions its arguments (\"$@\"), so {shlex.join(arguments)}"
+                           f" would be dropped; add \"$@\" where they go in {path.relative_to(root)}")
+        return execute([SHELL, str(path), *arguments], root, environment(root))
+    except (RunError, OSError) as e:
+        print(f"qq: {e}", file=sys.stderr)
+        return QQ_FAILED
+
+
 def run_command(args: argparse.Namespace) -> int:
     root = repo_root(Path.cwd())
     if root is None:
         print(f"qq: no {MANIFEST} here or above {Path.cwd()}; run qq run inside a repo", file=sys.stderr)
         return QQ_FAILED
-    literal = args.words[:1] == ["--"]
-    words = args.words[1:] if literal else args.words
+    words = args.words[1:] if args.words[:1] == ["--"] else args.words
     try:
-        if args.force and args.save is None:
-            raise RunError("--force only goes with --save")
-        if (args.list or args.show is not None) and words:
-            raise RunError(f"--list and --show take no command (got {words[0]!r})")
-        if args.list:
-            for name in saved_names(root):
-                print(f"{name}\t{_summary(root / COMMANDS / f'{name}.sh')}")
-            return 0
-        if args.show is not None:
-            path = saved_path(root, args.show)
-            if path is None:
-                raise RunError(f"no saved command {args.show!r} (qq run --list shows them)")
-            sys.stdout.write(visible(_read(path), keep="\n\t"))
-            return 0
-        if args.save is not None:
-            path = save(root, args.save, words, args.force)
-            print(f"qq: saved {path.relative_to(root)}; commit it to share it, run it with qq run {args.save}")
-            return 0
         if not words or not words[0].strip():
-            raise RunError('nothing to run: qq run "COMMAND", qq run NAME, or qq run --list')
-        try:
-            path = saved_path(root, words[0]) if NAME.fullmatch(words[0]) and not literal else None
-        except RunError as e:
-            raise RunError(f"{e} (put -- first to run a program without looking up saved commands)") from None
-        if path is not None:
-            if words[1:] and not mentions_arguments(_read(path)):
-                raise RunError(f"saved command {words[0]} never mentions its arguments (\"$@\"), so"
-                               f" {shlex.join(words[1:])} would be dropped; add \"$@\" where they go in"
-                               f" {path.relative_to(root)}")
-            print(f"qq: running saved command {words[0]} ({path.relative_to(root)})", file=sys.stderr)
-            argv = [SHELL, str(path), *words[1:]]
-        elif len(words) == 1:
-            argv = [SHELL, "-c", "--", words[0]]
-        else:
-            argv = words
+            raise RunError('nothing to run: qq run "COMMAND" (qq create NAME COMMAND keeps one as qq NAME)')
+        argv = [SHELL, "-c", "--", words[0]] if len(words) == 1 else words
         return execute(argv, root, environment(root))
     except (RunError, OSError) as e:
         print(f"qq: {e}", file=sys.stderr)
@@ -319,13 +321,8 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    group = p.add_mutually_exclusive_group()
-    group.add_argument("--save", metavar="NAME", help="save COMMAND as infra/commands/NAME.sh")
-    group.add_argument("--list", action="store_true", help="list the saved commands")
-    group.add_argument("--show", metavar="NAME", help="print the saved command NAME")
-    p.add_argument("--force", action="store_true", help="with --save, replace a saved command")
     p.add_argument("words", nargs=argparse.REMAINDER, metavar="COMMAND",
-                   help="a command line, a program and its arguments, or a saved command's name")
+                   help="a command line in one argument, or a program and its arguments")
     p.set_defaults(run=run_command)
     return p
 
@@ -338,6 +335,6 @@ def main(argv: list[str]) -> int:
 
 
 def register(sub) -> None:
-    _arguments(sub.add_parser("run", help="run a command, or a saved one, with the repo's pinned toolchains",
+    _arguments(sub.add_parser("run", help="run a command once, with the repo's pinned toolchains",
                               description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
                               allow_abbrev=False))
