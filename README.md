@@ -56,8 +56,8 @@ version of your depot checkout.
 
 Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/depot, also
 trusted under its coming name quirq-ai/qq, and release archives under it) or from a source you list
-in `$QQ_TRUSTED_SOURCES`, so a pull request that edits the manifest cannot make `qq status` run code from a host it picked. A `source` needs a
-digest. A `git:` digest fixes the exact commit, and qq checks pip installed that commit; a
+in `$QQ_TRUSTED_SOURCES`, so a pull request that edits the manifest cannot make `qq status` run
+code from a host it picked. A `source` needs a digest. A `git:` digest fixes the exact commit, and qq checks pip installed that commit; a
 `sha256:` digest fixes the archive; a version alone trusts the depot tag `v<version>`.
 
 Every qq environment (the launcher, each pinned version, the gate) installs PyPI packages only
