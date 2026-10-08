@@ -132,11 +132,12 @@ def _plain(url: str) -> bool:
 
 def trusted(source: str) -> bool:
     """Whether a pin may install qq from `source`: the depot qq uses ($QQ_DEPOT_URL, default
-    quirq-ai/depot, also under its new name quirq-ai/qq) or what the user trusts in $QQ_TRUSTED_SOURCES (space separated), and
-    anything under those (release archives). A repo's manifest alone never picks a new host."""
+    quirq-ai/depot, also under its coming name quirq-ai/qq) or what the user trusts in
+    $QQ_TRUSTED_SOURCES (space separated), and anything under those (release archives). A repo's manifest alone never picks a new host."""
     if not _plain(source):
         return False
-    bases = [DEFAULT_DEPOT_URL, RENAMED_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""), *os.environ.get(TRUSTED_ENV, "").split()]
+    bases = [DEFAULT_DEPOT_URL, RENAMED_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""),
+             *os.environ.get(TRUSTED_ENV, "").split()]
     src = _base(source)
     return any(b and (src == _base(b) or src.startswith(_base(b) + "/")) for b in bases)
 
