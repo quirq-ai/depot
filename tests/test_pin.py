@@ -113,6 +113,13 @@ def test_an_empty_depot_url_means_the_default(monkeypatch, tmp_path):
     ("https://user@github.com/quirq-ai/depot", False),
     ("https://github.com/quirq-ai/depot?x=/evil", False),
     ("github.com/quirq-ai/depot", False),
+    ("https://github.com/quirq-ai/qq", True),
+    ("https://github.com/quirq-ai/qq.git", True),
+    ("https://github.com/quirq-ai/qq/releases/download/v1/qq.tar.gz", True),
+    ("https://github.com/quirq-ai/qq-evil", False),
+    ("https://github.com/quirq-ai/qqx", False),
+    ("https://github.com/someone/qq", False),
+    ("https://github.com/quirq-ai/qq/../../evil/qq", False),
 ])
 def test_only_the_depot_is_trusted_by_default(monkeypatch, source, ok):
     monkeypatch.delenv("QQ_DEPOT_URL", raising=False)

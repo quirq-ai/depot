@@ -43,6 +43,10 @@ MANIFEST = Path("infra/repo.toml")
 # Set in the environment of a pinned qq, so it runs instead of dispatching again.
 PINNED_ENV = "QQ_PINNED"
 DEFAULT_DEPOT_URL = "https://github.com/quirq-ai/depot"
+# The depot's new name, trusted ahead of the rename (vision/org/rename-depot-to-qq.md) so a pin
+# that names either URL installs on both sides of it. Installs still default to the old URL, which
+# GitHub redirects after the rename; a follow-up moves the default once quirq-ai/qq exists.
+RENAMED_DEPOT_URL = "https://github.com/quirq-ai/qq"
 
 
 class PinError(Exception):
@@ -128,11 +132,11 @@ def _plain(url: str) -> bool:
 
 def trusted(source: str) -> bool:
     """Whether a pin may install qq from `source`: the depot qq uses ($QQ_DEPOT_URL, default
-    quirq-ai/depot) or what the user trusts in $QQ_TRUSTED_SOURCES (space separated), and
+    quirq-ai/depot, also under its new name quirq-ai/qq) or what the user trusts in $QQ_TRUSTED_SOURCES (space separated), and
     anything under those (release archives). A repo's manifest alone never picks a new host."""
     if not _plain(source):
         return False
-    bases = [DEFAULT_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""), *os.environ.get(TRUSTED_ENV, "").split()]
+    bases = [DEFAULT_DEPOT_URL, RENAMED_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""), *os.environ.get(TRUSTED_ENV, "").split()]
     src = _base(source)
     return any(b and (src == _base(b) or src.startswith(_base(b) + "/")) for b in bases)
 
