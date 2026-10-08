@@ -24,7 +24,7 @@ from qqdepot.pin import git_env, pip_install, qq_home
 
 # TODO(expert): let rollers move this pin, with the qqsync and qqrecipes pins in pyproject.toml.
 GATE_SOURCE = "https://github.com/quirq-ai/gate"
-GATE_COMMIT = "3b4250c05b6d629e048c2f760beb9ab4d3e2c251"   # main after #7: exit 3 for "not onboarded"
+GATE_COMMIT = "96c85d438b35cd239e9ddca87a42ed2a076a8d98"   # main after #30: pins infra-config 41a8cb0, which gates website
 # Override for development and tests: a qqgate executable and an infra-config checkout.
 GATE_ENV, CONFIG_ENV = "QQ_GATE", "QQ_GATE_CONFIG"
 
