@@ -5,6 +5,7 @@ toolchain its test needs, so `qq test` fails before `qq sync` and passes after i
 installed by hand. Sources are local (file://, a local git repo, a local OCI registry) so the
 test needs no network.
 """
+import gzip
 import hashlib
 import io
 import json
@@ -330,7 +331,7 @@ def test_a_dropped_pin_goes_even_when_qq_home_changed(tmp_path, monkeypatch):
 
 def _tar(tmp_path, members) -> Path:
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    with tarfile.open(fileobj=buf, mode="w") as tar:
         for name, kind, value in members:
             info = tarfile.TarInfo(name)
             if kind == "sym":
@@ -343,7 +344,8 @@ def _tar(tmp_path, members) -> Path:
                 info.size = len(value)
                 tar.addfile(info, io.BytesIO(value))
     path = tmp_path / f"a{len(list(tmp_path.glob('a*.tar.gz')))}.tar.gz"
-    path.write_bytes(buf.getvalue())
+    # gzip's header holds the time it was written: a fixed one keeps equal members equal bytes.
+    path.write_bytes(gzip.compress(buf.getvalue(), mtime=0))
     return path
 
 

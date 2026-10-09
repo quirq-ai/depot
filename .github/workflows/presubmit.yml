@@ -26,14 +26,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: quirq-ai/gate
-          ref: e718c70e1af337cd67d7e73d06f5d7e471bf7929  # gate main, terms.toml after #15
+          ref: 02a1fb335c609b1d9b594dfeff52805b87dc93e2  # gate main after #29 (terms.toml names qq since #31)
           path: .qq/gate
           persist-credentials: false
       - name: core code names no language, build tool or deploy target (gate's agnosticism guard)
         run: |
           python -m venv .qq/gate-venv
           .qq/gate-venv/bin/pip install --quiet -e .qq/gate
-          .qq/gate-venv/bin/qqgate guard --repo depot --github .
+          .qq/gate-venv/bin/qqgate guard --repo qq --github .
 
   # Limits: both runners share paths and user, and a red run fails before the compare, so
   # parity is shown for green runs; innernet's results are one case per action (no test suite).
@@ -128,8 +128,8 @@ jobs:
 
   # V0-DEP-04 against the real services, read-only: the pinned gate installs and computes the
   # product repos' required checks from infra-config, and `qq status` reads this very change
-  # through the real `gh` (depot is not in infra-config, so it is judged ungated). Submitting
-  # (try, land) is shown end to end with a fake gh in tests/test_change.py.
+  # through the real `gh` (qq is not a product repo in infra-config, so it is judged ungated).
+  # Submitting (try, land) is shown end to end with a fake gh in tests/test_change.py.
   live:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -154,7 +154,7 @@ jobs:
               names = [c["name"] for c in gate.required(repo)["required"]]
               print(repo, names)
               assert check in names, (repo, names)
-          assert gate.required("quirq-ai/depot") is None, "depot is not in infra-config, so it is ungated"
+          assert gate.required("quirq-ai/qq") is None, "qq is not a product repo in infra-config, so it is ungated"
           PY
       - name: qq status reads this change through gh
         if: github.event_name == 'pull_request'
