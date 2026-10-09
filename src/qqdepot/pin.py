@@ -3,7 +3,7 @@
 The pin is the manifest's `[qq]` table (schema quirq-repo/1, read only through qqsync):
 
     [qq]
-    version = "0.1.0"                  # installs the depot tag v0.1.0
+    version = "0.1.0"                  # installs the qq tag v0.1.0
     source = "https://..."             # optional: where to get exactly these bytes
     digest = "git:<commit>"            # or sha256:<archive digest>
 
@@ -12,11 +12,11 @@ reused. Before first use the installed qq must report the pinned version (and, f
 git: digest, have been installed from that commit), so a tag or archive that holds
 something else is an error, not a silent mismatch.
 
-A pin installs only from the depot ($QQ_DEPOT_URL, default quirq-ai/depot) or from a
+A pin installs only from the depot ($QQ_DEPOT_URL, default quirq-ai/qq) or from a
 source the user lists in $QQ_TRUSTED_SOURCES, and a git: commit must be on main or a v*
 tag there: a pull request that edits the manifest cannot make `qq status` run code from
 a host, or a fork, of its choosing.
-TODO(suraj): protect v* tags in quirq-ai/depot (a version-only pin trusts the tag), and
+TODO(suraj): protect v* tags in quirq-ai/qq (a version-only pin trusts the tag), and
 bump __version__ with each release so a version names one commit.
 """
 from __future__ import annotations
@@ -42,11 +42,11 @@ from qqdepot import __version__
 MANIFEST = Path("infra/repo.toml")
 # Set in the environment of a pinned qq, so it runs instead of dispatching again.
 PINNED_ENV = "QQ_PINNED"
-DEFAULT_DEPOT_URL = "https://github.com/quirq-ai/depot"
-# The depot's coming name, trusted ahead of renaming quirq-ai/depot to quirq-ai/qq so a pin
-# that names either URL installs on both sides of it. Installs still default to the old URL, which
-# GitHub redirects after the rename; a follow-up moves the default once quirq-ai/qq exists.
-RENAMED_DEPOT_URL = "https://github.com/quirq-ai/qq"
+DEFAULT_DEPOT_URL = "https://github.com/quirq-ai/qq"
+# The depot's name until quirq-ai/depot was renamed quirq-ai/qq (2026-10-09). Still trusted, so a
+# `[qq] source` that names it keeps installing (GitHub redirects it); a later change drops it once
+# nothing names it.
+OLD_DEPOT_URL = "https://github.com/quirq-ai/depot"
 
 
 class PinError(Exception):
@@ -132,12 +132,12 @@ def _plain(url: str) -> bool:
 
 def trusted(source: str) -> bool:
     """Whether a pin may install qq from `source`: the depot qq uses ($QQ_DEPOT_URL, default
-    quirq-ai/depot, also under its coming name quirq-ai/qq) or what the user trusts in
+    quirq-ai/qq, also under its old name quirq-ai/depot) or what the user trusts in
     $QQ_TRUSTED_SOURCES (space separated), and anything under those (release archives). A repo's
     manifest alone never picks a new host."""
     if not _plain(source):
         return False
-    bases = [DEFAULT_DEPOT_URL, RENAMED_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""),
+    bases = [DEFAULT_DEPOT_URL, OLD_DEPOT_URL, os.environ.get("QQ_DEPOT_URL", ""),
              *os.environ.get(TRUSTED_ENV, "").split()]
     src = _base(source)
     return any(b and (src == _base(b) or src.startswith(_base(b) + "/")) for b in bases)
