@@ -56,7 +56,7 @@ def test_key():
 
 def test_requirement_by_version(monkeypatch, tmp_path):
     monkeypatch.delenv("QQ_DEPOT_URL", raising=False)
-    assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+https://github.com/quirq-ai/depot@v1.0"
+    assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+https://github.com/quirq-ai/qq@v1.0"
     monkeypatch.setenv("QQ_DEPOT_URL", "file:///mirror/depot")
     assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+file:///mirror/depot@v1.0"
 
@@ -97,7 +97,7 @@ def test_a_commit_pin_must_be_on_main_or_a_release_tag(tmp_path):
 
 def test_an_empty_depot_url_means_the_default(monkeypatch, tmp_path):
     monkeypatch.setenv("QQ_DEPOT_URL", "")
-    assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+https://github.com/quirq-ai/depot@v1.0"
+    assert pin.requirement(pin.Pin("1.0"), tmp_path) == "git+https://github.com/quirq-ai/qq@v1.0"
 
 
 @pytest.mark.parametrize("source, ok", [

@@ -1,8 +1,8 @@
-# depot
+# qq
 
-`depot` is `qq`, the quirq infra command line. Every repo that quirq infra builds pins the
-`qq` version it runs in its manifest, `infra/repo.toml`, and `qq` installs and runs exactly that
-version.
+`qq` is the quirq infra command line (this repo was `quirq-ai/depot` until 2026-10-09; the old
+URL redirects here). Every repo that quirq infra builds pins the `qq` version it runs in its
+manifest, `infra/repo.toml`, and `qq` installs and runs exactly that version.
 
 ## Chromium counterpart
 
@@ -25,8 +25,8 @@ Clone this repo once and put its `bin` directory on `PATH`, as with depot_tools.
 `git` and `python3` 3.11.4 or newer with its `venv` module.
 
 ```sh
-git clone https://github.com/quirq-ai/depot ~/depot
-export PATH="$HOME/depot/bin:$PATH"
+git clone https://github.com/quirq-ai/qq ~/qq
+export PATH="$HOME/qq/bin:$PATH"
 qq --version
 ```
 
@@ -41,8 +41,8 @@ Every repo pins the `qq` it runs in its manifest, read only through `sync`:
 
 ```toml
 [qq]
-version = "0.1.0"          # installs depot tag v0.1.0
-# source = "https://github.com/quirq-ai/depot"   # optional: pin the bytes too,
+version = "0.1.0"          # installs qq tag v0.1.0
+# source = "https://github.com/quirq-ai/qq"      # optional: pin the bytes too,
 # digest = "git:<commit>"                         # by commit, or sha256:<archive digest>
 ```
 
@@ -54,8 +54,8 @@ installs the new version by itself: that is how `qq` updates. depot has no relea
 checkout, which reports `0.1.0`. Outside a repo, or in one without a `[qq]` table, `qq` runs the
 version of your depot checkout.
 
-Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/depot, also trusted
-under its coming name quirq-ai/qq, and release archives under it) or from a source you list in
+Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/qq, also trusted
+under its old name quirq-ai/depot, and release archives under it) or from a source you list in
 `$QQ_TRUSTED_SOURCES`, so a pull request that edits the manifest cannot make `qq status` run code
 from a host it picked. A `source` needs a digest. A `git:` digest fixes the exact commit, and qq
 checks pip installed that commit; a `sha256:` digest fixes the archive; a version alone trusts the
