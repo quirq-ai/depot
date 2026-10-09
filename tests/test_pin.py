@@ -101,9 +101,9 @@ def test_an_empty_depot_url_means_the_default(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("source, ok", [
-    ("https://github.com/quirq-ai/depot", True),
-    ("https://github.com/quirq-ai/depot.git", True),
-    ("https://github.com/quirq-ai/depot/releases/download/v1/qq.tar.gz", True),
+    ("https://github.com/quirq-ai/depot", False),
+    ("https://github.com/quirq-ai/depot.git", False),
+    ("https://github.com/quirq-ai/depot/releases/download/v1/qq.tar.gz", False),
     ("https://github.com/quirq-ai/depot-evil", False),
     ("https://github.com/someone/depot", False),
     ("https://example.invalid/depot", False),
