@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 # Other qq repos by pinned commit, never by copying code. TODO(expert): let rollers move this pin.
 dependencies = [
     "qqsync @ git+https://github.com/quirq-ai/sync@aecb0fdb89f0d88b61a26052f5b3c26c48392841",
-    "qqrecipes @ git+https://github.com/quirq-ai/recipes@3af54a85c73535400b423bc57bd96054c008e594",
+    "qqrecipes @ git+https://github.com/quirq-ai/recipes@d1fd02ada9584df18207f262dee835fa2a460f2a",
 ]
 
 [project.optional-dependencies]

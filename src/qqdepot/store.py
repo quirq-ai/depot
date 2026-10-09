@@ -3,8 +3,10 @@
 A pin (quirq-repo/1) is a source and a digest. The source's scheme picks the fetcher:
 
     https://..., file://...        an artifact; its bytes must hash to the sha256 digest
-    oci://REGISTRY/REPO[@MANIFEST] an artifact layer in an OCI registry (the toolchains repo
-                                   publishes here); the blob named by the sha256 digest
+    oci://REGISTRY/REPO@MANIFEST   an artifact layer in an OCI registry (the toolchains repo
+                                   publishes here); the source must name the image manifest
+                                   (qqsync refuses one that does not) and the sha256 digest
+                                   names the layer blob in it
     any git URL + git:<commit>     a source tree at that commit
 
 Each pin is fetched once per machine into $QQ_HOME/store/<algo>-<hex>, unpacked when it is a
