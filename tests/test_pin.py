@@ -108,11 +108,11 @@ def test_an_empty_depot_url_means_the_default(monkeypatch, tmp_path):
     ("https://github.com/someone/depot", False),
     ("https://example.invalid/depot", False),
     ("https://github.com/quirq-ai/depot/../../evil/depot", False),
-    ("https://github.com/quirq-ai/depot/%2e%2e/evil", False),
-    ("https://github.com/quirq-ai/depot@evil.invalid/x", False),
-    ("https://user@github.com/quirq-ai/depot", False),
-    ("https://github.com/quirq-ai/depot?x=/evil", False),
-    ("github.com/quirq-ai/depot", False),
+    ("https://github.com/quirq-ai/qq/%2e%2e/evil", False),
+    ("https://github.com/quirq-ai/qq@evil.invalid/x", False),
+    ("https://user@github.com/quirq-ai/qq", False),
+    ("https://github.com/quirq-ai/qq?x=/evil", False),
+    ("github.com/quirq-ai/qq", False),
     ("https://github.com/quirq-ai/qq", True),
     ("https://github.com/quirq-ai/qq.git", True),
     ("https://github.com/quirq-ai/qq/releases/download/v1/qq.tar.gz", True),
@@ -136,7 +136,7 @@ def test_an_untrusted_source_is_refused_before_anything_installs(monkeypatch, tm
     monkeypatch.setenv("QQ_TRUSTED_SOURCES", "https://other.invalid https://example.invalid/depot")
     pin.check(evil)
     with pytest.raises(pin.PinError, match="needs a digest"):
-        pin.check(pin.Pin("1.0", "https://github.com/quirq-ai/depot", None))
+        pin.check(pin.Pin("1.0", "https://github.com/quirq-ai/qq", None))
 
 
 def test_archive_digest_checked(tmp_path):

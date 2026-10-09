@@ -128,8 +128,8 @@ jobs:
 
   # V0-DEP-04 against the real services, read-only: the pinned gate installs and computes the
   # product repos' required checks from infra-config, and `qq status` reads this very change
-  # through the real `gh` (depot is not in infra-config, so it is judged ungated). Submitting
-  # (try, land) is shown end to end with a fake gh in tests/test_change.py.
+  # through the real `gh` (qq is not a product repo in infra-config, so it is judged ungated).
+  # Submitting (try, land) is shown end to end with a fake gh in tests/test_change.py.
   live:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -154,7 +154,7 @@ jobs:
               names = [c["name"] for c in gate.required(repo)["required"]]
               print(repo, names)
               assert check in names, (repo, names)
-          assert gate.required("quirq-ai/depot") is None, "depot is not in infra-config, so it is ungated"
+          assert gate.required("quirq-ai/qq") is None, "qq is not a product repo in infra-config, so it is ungated"
           PY
       - name: qq status reads this change through gh
         if: github.event_name == 'pull_request'
