@@ -3,7 +3,7 @@
 The pin is the manifest's `[qq]` table (schema quirq-repo/1, read only through qqsync):
 
     [qq]
-    version = "0.1.0"                  # installs the depot tag v0.1.0
+    version = "0.1.0"                  # installs the qq tag v0.1.0
     source = "https://..."             # optional: where to get exactly these bytes
     digest = "git:<commit>"            # or sha256:<archive digest>
 
@@ -44,7 +44,7 @@ MANIFEST = Path("infra/repo.toml")
 PINNED_ENV = "QQ_PINNED"
 DEFAULT_DEPOT_URL = "https://github.com/quirq-ai/qq"
 # The depot's name until quirq-ai/depot was renamed quirq-ai/qq (2026-10-09). Still trusted, so a
-# pin or clone that names it keeps installing (GitHub redirects it); a later change drops it once
+# `[qq] source` that names it keeps installing (GitHub redirects it); a later change drops it once
 # nothing names it.
 OLD_DEPOT_URL = "https://github.com/quirq-ai/depot"
 

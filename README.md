@@ -49,17 +49,17 @@ version = "0.1.0"          # installs qq tag v0.1.0
 Inside such a repo, `qq` runs exactly the pinned version. The first run on a machine installs it
 into its own environment under `$QQ_HOME` (default `~/.cache/qq/versions/<version>`) and checks
 that it reports the pinned version; later runs reuse it. When a roll moves the pin, the next `qq`
-installs the new version by itself: that is how `qq` updates. depot has no release tag yet, so no
-`v0.1.0` tag exists to install; a pin of version `0.1.0` with no `source` or `digest` runs your depot
+installs the new version by itself: that is how `qq` updates. qq has no release tag yet, so no
+`v0.1.0` tag exists to install; a pin of version `0.1.0` with no `source` or `digest` runs your qq
 checkout, which reports `0.1.0`. Outside a repo, or in one without a `[qq]` table, `qq` runs the
-version of your depot checkout.
+version of your qq checkout.
 
 Trust: a pin installs qq only from the depot (`$QQ_DEPOT_URL`, default quirq-ai/qq, also trusted
 under its old name quirq-ai/depot, and release archives under it) or from a source you list in
 `$QQ_TRUSTED_SOURCES`, so a pull request that edits the manifest cannot make `qq status` run code
 from a host it picked. A `source` needs a digest. A `git:` digest fixes the exact commit, and qq
 checks pip installed that commit; a `sha256:` digest fixes the archive; a version alone trusts the
-depot tag `v<version>`.
+qq tag `v<version>`.
 
 Every qq environment (the launcher, each pinned version, the gate) installs PyPI packages only
 by hash from `src/qqdepot/locks/pypi.txt`, and everything else (qqsync, qqrecipes, the gate) by
@@ -74,11 +74,11 @@ requirements. pip still reads your own `PIP_*` variables and pip config (proxy, 
 |---|---|
 | `QQ_HOME` | Where launchers and pinned versions live |
 | `QQ_PYTHON` | The interpreter the bootstrap uses (default `python3`) |
-| `QQ_TRUSTED_SOURCES` | Space-separated sources a `[qq]` pin may install from, besides the depot |
+| `QQ_TRUSTED_SOURCES` | Space-separated sources a `[qq]` pin may install from, besides the qq repo |
 | `QQ_DEPOT_URL` | Where version tags are fetched from (default this repo; a mirror works) |
 | `QQ_PINNED=1` | Run this `qq` as is, without reading the pin (applies to that one process) |
 
-TODO(expert): once depot publishes releases (release repo), pin by `sha256` archive by default and
+TODO(expert): once qq publishes releases (release repo), pin by `sha256` archive by default and
 let the bootstrap update its own checkout.
 
 ## Get a repo's toolchains and dependencies
@@ -177,7 +177,7 @@ never from `qq sync`, `qq build` or `qq test`; read `infra/commands/NAME.sh` wit
 (plain `cat` lets terminal escapes in it act) before running one from a repo you do not trust. CI
 does not run them yet.
 
-A repo that pins `[qq] version = "0.1.0"` (xo-space and innernet do) runs the `qq` of your depot
+A repo that pins `[qq] version = "0.1.0"` (xo-space and innernet do) runs the `qq` of your qq
 checkout, since that is the version it reports, so it has these commands once your checkout
 includes #23. A repo that pins qq by digest gets them when its pin moves to a commit that
 has them.
