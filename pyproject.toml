@@ -12,8 +12,8 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 # Other qq repos by pinned commit, never by copying code. TODO(expert): let rollers move this pin.
 dependencies = [
-    "qqsync @ git+https://github.com/quirq-ai/sync@9f4c77ebe2c81d6ffd643d737a35b962f6fd322a",
-    "qqrecipes @ git+https://github.com/quirq-ai/recipes@2dc05d038ad9023d0110f0f0b78df4e34f7a25f3",
+    "qqsync @ git+https://github.com/quirq-ai/sync@aecb0fdb89f0d88b61a26052f5b3c26c48392841",
+    "qqrecipes @ git+https://github.com/quirq-ai/recipes@d1fd02ada9584df18207f262dee835fa2a460f2a",
 ]
 
 [project.optional-dependencies]
